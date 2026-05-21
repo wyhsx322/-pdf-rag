@@ -17,14 +17,20 @@ from openai import OpenAI
 from rank_bm25 import BM25Okapi
 from sentence_transformers import CrossEncoder
 
+from .config import (
+    DASHSCOPE_API_KEY_ENV,
+    DASHSCOPE_BASE_URL,
+    EMBEDDING_MODEL,
+    MAX_RETRIES,
+    RERANKER_MODEL,
+    MODELSCOPE_CACHE_DIR,
+    CHROMA_HNSW_SPACE,
+    DEFAULT_TOP_K,
+)
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-# Modelscope 缓存根目录
-_MODELSCOPE_CACHE = os.path.join(
-    os.path.expanduser("~"), ".cache", "modelscope", "hub", "models"
-)
 
 
 def _resolve_modelscope_path(model_name: str) -> str:
@@ -36,7 +42,7 @@ def _resolve_modelscope_path(model_name: str) -> str:
     Returns:
         Modelscope 本地缓存目录的绝对路径。
     """
-    local_dir = os.path.join(_MODELSCOPE_CACHE, model_name.replace("/", os.sep))
+    local_dir = os.path.join(MODELSCOPE_CACHE_DIR, model_name.replace("/", os.sep))
     if os.path.isdir(local_dir):
         logger.info("Reranker 模型已缓存: %s", local_dir)
         return local_dir
@@ -76,29 +82,29 @@ class HybridRetriever:
         self,
         chroma_path: str,
         collection_name: str,
-        embedding_model_name: str = "text-embedding-v4",
-        reranker_model_name: str = "BAAI/bge-reranker-v2-m3",
+        embedding_model_name: str = EMBEDDING_MODEL,
+        reranker_model_name: str = RERANKER_MODEL,
     ):
         self._model_name = embedding_model_name
         self._reranker_model_name = reranker_model_name
         self._reranker: Optional[CrossEncoder] = None
 
-        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        api_key = os.environ.get(DASHSCOPE_API_KEY_ENV, "")
         if not api_key:
             raise RuntimeError(
-                "未找到 DASHSCOPE_API_KEY，请在环境变量或 .env 文件中配置"
+                f"未找到 {DASHSCOPE_API_KEY_ENV}，请在环境变量或 .env 文件中配置"
             )
 
         self._client = OpenAI(
             api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            base_url=DASHSCOPE_BASE_URL,
         )
         logger.info("DashScope 客户端就绪，模型=%s", self._model_name)
 
         self._db = chromadb.PersistentClient(path=chroma_path)
         self._collection = self._db.get_or_create_collection(
             name=collection_name,
-            metadata={"hnsw:space": "cosine"},
+            metadata={"hnsw:space": CHROMA_HNSW_SPACE},
         )
         logger.info(
             "集合 '%s' 就绪（当前行数=%d）",
@@ -116,8 +122,7 @@ class HybridRetriever:
 
     def _encode(self, texts: list[str]) -> list[list[float]]:
         """通过 DashScope API 编码一批文本，失败时自动重试。"""
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(MAX_RETRIES):
             try:
                 resp = self._client.embeddings.create(
                     model=self._model_name,
@@ -125,11 +130,11 @@ class HybridRetriever:
                 )
                 return [item.embedding for item in resp.data]
             except Exception as e:
-                if attempt < max_retries - 1:
+                if attempt < MAX_RETRIES - 1:
                     wait = 2 ** attempt
                     logger.warning(
                         "嵌入 API 错误（第 %d/%d 次），%d 秒后重试: %s",
-                        attempt + 1, max_retries, wait, e,
+                        attempt + 1, MAX_RETRIES, wait, e,
                     )
                     time.sleep(wait)
                 else:
@@ -161,7 +166,7 @@ class HybridRetriever:
         if self._reranker is not None:
             return
         logger.info("加载 Reranker 模型: %s", self._reranker_model_name)
-        model_path = _resolve_modelscope_path(self._reranker_model_name)
+        model_path = _resolve_modelscope_path(self._reranker_model_name or RERANKER_MODEL)
         self._reranker = CrossEncoder(model_path)
         logger.info("Reranker 模型就绪")
 
@@ -169,7 +174,7 @@ class HybridRetriever:
     # 公开方法
     # ------------------------------------------------------------------
 
-    def search(self, question: str, top_k: int = 10, use_reranker: bool = False) -> list[dict]:
+    def search(self, question: str, top_k: int = DEFAULT_TOP_K, use_reranker: bool = False) -> list[dict]:
         """混合检索：向量 + BM25，合并去重后返回。
 
         Args:
@@ -259,7 +264,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     retriever = HybridRetriever(
-        chroma_path="./output/chroma_demo/demo1",
+        chroma_path="output/chroma_demo/demo1",
         collection_name="demo1_papers",
     )
 

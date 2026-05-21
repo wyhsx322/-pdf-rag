@@ -17,10 +17,14 @@ from pathlib import Path
 # 强制 UTF-8 输出，避免 Windows GBK 编码问题
 sys.stdout.reconfigure(encoding="utf-8")
 
-# 确保 test/ 目录在 sys.path 中，以便导入同目录模块
-sys.path.insert(0, str(Path(__file__).parent))
-
-from hybrid_search import HybridRetriever
+from .config import (
+    DEFAULT_TOP_K,
+    EVAL_K_VALUES,
+    EVAL_METRIC_KEYS,
+    OUTPUT_CHROMA_DIR,
+    COLLECTION_NAME_SUFFIX,
+)
+from .hybrid_search import HybridRetriever
 
 # ---------------------------------------------------------------------------
 # 测试查询与 ground truth
@@ -121,12 +125,12 @@ TEST_QUERIES = [
 BASE = Path(__file__).parent.parent  # D:\pythonProject\PDF_1.0
 COLLECTION_CONFIG = {
     "demo1": {
-        "chroma_path": str(BASE / "output" / "chroma_demo" / "demo1"),
-        "collection_name": "demo1_papers",
+        "chroma_path": str(BASE / OUTPUT_CHROMA_DIR / "demo1"),
+        "collection_name": f"demo1{COLLECTION_NAME_SUFFIX}",
     },
     "demo2": {
-        "chroma_path": str(BASE / "output" / "chroma_demo" / "demo2"),
-        "collection_name": "demo2_papers",
+        "chroma_path": str(BASE / OUTPUT_CHROMA_DIR / "demo2"),
+        "collection_name": f"demo2{COLLECTION_NAME_SUFFIX}",
     },
 }
 
@@ -155,7 +159,7 @@ def ndcg_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float
 def compute_metrics(
     retrieved_ids: list[str],
     relevant_ids: set[str],
-    k_values: tuple[int, ...] = (5, 10),
+    k_values: tuple[int, ...] = EVAL_K_VALUES,
 ) -> dict:
     """计算 Recall@K, Precision@K, MRR, NDCG@K。"""
     metrics = {}
@@ -236,7 +240,7 @@ def run_eval():
         for col in search_collections:
             retriever = get_retriever(col)
             results_no_rerank.extend(
-                retriever.search(query, top_k=10, use_reranker=False)
+                retriever.search(query, top_k=DEFAULT_TOP_K, use_reranker=False)
             )
         # 跨集合时按 vector_score 重新降序排列
         results_no_rerank.sort(key=lambda r: r["vector_score"], reverse=True)
@@ -248,7 +252,7 @@ def run_eval():
         for col in search_collections:
             retriever = get_retriever(col)
             results_rerank.extend(
-                retriever.search(query, top_k=10, use_reranker=True)
+                retriever.search(query, top_k=DEFAULT_TOP_K, use_reranker=True)
             )
         # 跨集合时按 rerank_score 重新降序排列
         results_rerank.sort(
@@ -303,7 +307,7 @@ def run_eval():
     print("汇总：平均指标对比")
     print(f"{'=' * 70}")
 
-    metric_keys = ["Recall@5", "Recall@10", "Precision@5", "Precision@10", "MRR", "NDCG@10"]
+    metric_keys = list(EVAL_METRIC_KEYS)
     print(f"\n{'指标':<16} {'无Reranker':>10} {'有Reranker':>10} {'变化':>10}")
     print(f"{'-' * 16} {'-' * 10} {'-' * 10} {'-' * 10}")
 

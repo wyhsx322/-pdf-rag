@@ -12,6 +12,8 @@ from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from marker.output import text_from_rendered
 
+from .config import DEVICE
+
 
 
 def parse_pdf_to_markdown(pdf_path: str) -> Tuple[str, dict, dict]:
@@ -29,7 +31,7 @@ def parse_pdf_to_markdown(pdf_path: str) -> Tuple[str, dict, dict]:
     """
     if not os.path.isfile(pdf_path):
         raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
-    device = "cuda"
+    device = DEVICE
 
 
     # 初始化模型字典，尝试指定设备

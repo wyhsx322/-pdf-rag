@@ -11,6 +11,8 @@ from typing import Tuple
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from .config import CHUNK_SIZE, CHUNK_OVERLAP, CHUNK_SEPARATORS
+
 logger = logging.getLogger(__name__)
 
 # 圈码数字 ① (U+2460) 到 ⑳ (U+2473)
@@ -127,8 +129,8 @@ def _parse_markdown_to_pages(text: str) -> dict[int, str]:
 def split_markdown_by_page(
     page_map: dict[int, str],
     source: str = "论文标题",
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
+    chunk_size: int = CHUNK_SIZE,
+    chunk_overlap: int = CHUNK_OVERLAP,
     remove_page_footnotes: bool = True,
     keep_footnotes_in_metadata: bool = False,
 ) -> list[dict]:
@@ -148,7 +150,7 @@ def split_markdown_by_page(
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", "。", ".", "！", "？", "；", ";", " ", ""],
+        separators=CHUNK_SEPARATORS,
         length_function=len,
     )
 
@@ -217,8 +219,6 @@ if __name__ == "__main__":
     chunks = split_markdown_by_page(
         page_map,
         source=source_name,
-        chunk_size=1000,
-        chunk_overlap=200,
         remove_page_footnotes=True,
         keep_footnotes_in_metadata=True,
     )

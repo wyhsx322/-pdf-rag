@@ -13,14 +13,19 @@ import chromadb
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from .config import (
+    DASHSCOPE_API_KEY_ENV,
+    DASHSCOPE_BASE_URL,
+    EMBEDDING_MODEL,
+    EMBEDDING_DIM,
+    EMBEDDING_BATCH_LIMIT,
+    MAX_RETRIES,
+    CHROMA_HNSW_SPACE,
+)
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-# text-embedding-v4 固定维度
-_DIM = 1024
-# 单次 API 调用最大文本数（text-embedding-v4 限制为 10）
-_BATCH_LIMIT = 10
 
 
 class VectorStoreManager:
@@ -37,7 +42,7 @@ class VectorStoreManager:
 
     def __init__(
         self,
-        embedding_model_name: str = "text-embedding-v4",
+        embedding_model_name: str = EMBEDDING_MODEL,
         db_path: str = "./output/chroma_demo",
         collection_name: str = "papers",
     ):
@@ -45,15 +50,15 @@ class VectorStoreManager:
         self.db_path = db_path
         self.model_name = embedding_model_name
 
-        api_key = os.environ.get("DASHSCOPE_API_KEY", "")
+        api_key = os.environ.get(DASHSCOPE_API_KEY_ENV, "")
         if not api_key:
             raise RuntimeError(
-                "未找到 DASHSCOPE_API_KEY，请在环境变量或 .env 文件中配置"
+                f"未找到 {DASHSCOPE_API_KEY_ENV}，请在环境变量或 .env 文件中配置"
             )
 
         self._client = OpenAI(
             api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            base_url=DASHSCOPE_BASE_URL,
         )
         logger.info("DashScope 客户端就绪，模型=%s", self.model_name)
 
@@ -66,7 +71,7 @@ class VectorStoreManager:
 
         self._collection = self._db.get_or_create_collection(
             name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},
+            metadata={"hnsw:space": CHROMA_HNSW_SPACE},
         )
         logger.info(
             "集合 '%s' 就绪（当前行数=%d，度量=cosine）",
@@ -79,8 +84,7 @@ class VectorStoreManager:
 
     def _encode_batch(self, texts: list[str]) -> list[list[float]]:
         """通过 DashScope API 编码一批文本，失败时自动重试。"""
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(MAX_RETRIES):
             try:
                 resp = self._client.embeddings.create(
                     model=self.model_name,
@@ -88,11 +92,11 @@ class VectorStoreManager:
                 )
                 return [item.embedding for item in resp.data]
             except Exception as e:
-                if attempt < max_retries - 1:
+                if attempt < MAX_RETRIES - 1:
                     wait = 2 ** attempt
                     logger.warning(
                         "嵌入 API 错误（第 %d/%d 次），%d 秒后重试: %s",
-                        attempt + 1, max_retries, wait, e,
+                        attempt + 1, MAX_RETRIES, wait, e,
                     )
                     time.sleep(wait)
                 else:
@@ -130,10 +134,10 @@ class VectorStoreManager:
         logger.info("正在通过 %s 编码 %d 个分块 …", self.model_name, total)
 
         all_embeddings: list[list[float]] = []
-        for i in range(0, total, _BATCH_LIMIT):
-            batch = texts[i:i + _BATCH_LIMIT]
+        for i in range(0, total, EMBEDDING_BATCH_LIMIT):
+            batch = texts[i:i + EMBEDDING_BATCH_LIMIT]
             all_embeddings.extend(self._encode_batch(batch))
-            logger.info("  已编码 %d/%d", min(i + _BATCH_LIMIT, total), total)
+            logger.info("  已编码 %d/%d", min(i + EMBEDDING_BATCH_LIMIT, total), total)
 
         ids: list[str] = []
         metadatas: list[dict] = []
@@ -225,6 +229,8 @@ if __name__ == "__main__":
     import pathlib
     import sys
 
+    from .config import OUTPUT_CHROMA_DIR, COLLECTION_NAME_SUFFIX
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     if len(sys.argv) < 2:
@@ -238,14 +244,13 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"分块文件未找到: {chunks_file}")
 
     name = chunks_file.stem
-    db_path = sys.argv[2] if len(sys.argv) > 2 else f"./output/chroma_demo/{name}"
-    collection_name = sys.argv[3] if len(sys.argv) > 3 else f"{name}_papers"
+    db_path = sys.argv[2] if len(sys.argv) > 2 else f"{OUTPUT_CHROMA_DIR}/{name}"
+    collection_name = sys.argv[3] if len(sys.argv) > 3 else f"{name}{COLLECTION_NAME_SUFFIX}"
 
     chunks = json.loads(chunks_file.read_text(encoding="utf-8"))
     logger.info("从 %s 加载了 %d 个分块", chunks_file, len(chunks))
 
     store = VectorStoreManager(
-        embedding_model_name="text-embedding-v4",
         db_path=db_path,
         collection_name=collection_name,
     )

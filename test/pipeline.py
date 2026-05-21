@@ -28,20 +28,32 @@ import os
 import pathlib
 import sys
 
+from .config import (
+    PROJECT_ROOT,
+    PRIMARY_DATA_DIR,
+    OUTPUT_MARKDOWN_DIR,
+    OUTPUT_SPLIT_DIR,
+    OUTPUT_CHROMA_DIR,
+    COLLECTION_NAME_SUFFIX,
+    CHUNK_SIZE,
+    CHUNK_OVERLAP,
+    EMBEDDING_MODEL,
+)
+
 logger = logging.getLogger(__name__)
 
 
 def resolve_paths(name: str) -> dict:
     """根据名称推导全部路径。"""
-    base = pathlib.Path.cwd()
+    base = PROJECT_ROOT
     return {
-        "pdf": base / "primary_datas" / name / f"{name}.pdf",
-        "md_dir": base / "output" / "markd_demo" / name,
-        "md": base / "output" / "markd_demo" / name / f"{name}.md",
-        "chunks_dir": base / "output" / "split_demo" / name,
-        "chunks": base / "output" / "split_demo" / name / f"{name}.json",
-        "db_path": base / "output" / "chroma_demo" / name,
-        "collection": f"{name}_papers",
+        "pdf": base / PRIMARY_DATA_DIR / name / f"{name}.pdf",
+        "md_dir": base / OUTPUT_MARKDOWN_DIR / name,
+        "md": base / OUTPUT_MARKDOWN_DIR / name / f"{name}.md",
+        "chunks_dir": base / OUTPUT_SPLIT_DIR / name,
+        "chunks": base / OUTPUT_SPLIT_DIR / name / f"{name}.json",
+        "db_path": base / OUTPUT_CHROMA_DIR / name,
+        "collection": f"{name}{COLLECTION_NAME_SUFFIX}",
     }
 
 
@@ -83,8 +95,6 @@ def step2_md_to_chunks(md_path: pathlib.Path, chunks_path: pathlib.Path, source:
     chunks = split_markdown_by_page(
         page_map,
         source=source,
-        chunk_size=1000,
-        chunk_overlap=200,
         remove_page_footnotes=True,
         keep_footnotes_in_metadata=True,
     )
@@ -111,7 +121,6 @@ def step3_chunks_to_db(
     logger.info("  加载 %d 个分块", len(chunks))
 
     store = VectorStoreManager(
-        embedding_model_name="text-embedding-v4",
         db_path=str(db_path),
         collection_name=collection_name,
     )
@@ -147,5 +156,5 @@ def main():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    sys.path.insert(0, str(pathlib.Path(__file__).parent))
+    sys.path.insert(0, str(PROJECT_ROOT / "test"))
     main()

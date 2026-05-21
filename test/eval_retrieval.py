@@ -12,7 +12,7 @@
 
 用法::
 
-    cd test && python eval_retrieval.py
+    python -m test.eval_retrieval
 """
 
 import math

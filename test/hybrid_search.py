@@ -26,7 +26,9 @@ from .config import (
     MODELSCOPE_CACHE_DIR,
     CHROMA_HNSW_SPACE,
     DEFAULT_TOP_K,
+    RRF_K,
 )
+from .query_processor import QueryProcessor
 
 load_dotenv()
 
@@ -116,6 +118,8 @@ class HybridRetriever:
         self._all_metadatas: list[dict] = []
         self._build_bm25_index()
 
+        self._query_processor: Optional[QueryProcessor] = None
+
     # ------------------------------------------------------------------
     # 内部方法
     # ------------------------------------------------------------------
@@ -171,30 +175,62 @@ class HybridRetriever:
         logger.info("Reranker 模型就绪")
 
     # ------------------------------------------------------------------
-    # 公开方法
+    # RRF 融合
     # ------------------------------------------------------------------
 
-    def search(self, question: str, top_k: int = DEFAULT_TOP_K, use_reranker: bool = False) -> list[dict]:
-        """混合检索：向量 + BM25，合并去重后返回。
+    @staticmethod
+    def _rrf_fuse(result_lists: list[list[dict]], k: int = RRF_K) -> list[dict]:
+        """对多个排序结果列表执行 Reciprocal Rank Fusion。
+
+        每个列表中的项按位置排名（1-indexed）。不在某列表中的项
+        不获得该列表的贡献。
 
         Args:
-            question: 查询文本。
-            top_k: 每路返回的最大结果数。
-            use_reranker: 为 True 时使用 BGE-Reranker 对合并结果重排序。
+            result_lists: 多个结果列表，每个列表按得分降序排列。
+            k: RRF 平滑常数。
 
         Returns:
-            字典列表，每个字典包含 text, page, source, chunk_id,
-            vector_score, bm25_score。
-            当 use_reranker=True 时额外包含 rerank_score，并按该分数降序排列。
+            融合后的结果列表，按 rrf_score 降序排列。
         """
-        if self._collection.count() == 0:
-            logger.warning("集合为空，返回空结果")
-            return []
-
         merged: dict[str, dict] = {}
+        num_lists = len(result_lists)
 
-        # ── 向量检索 ──────────────────────────────────────────────
-        query_emb = self._encode([question])[0]
+        for lst in result_lists:
+            for rank, item in enumerate(lst, start=1):
+                cid = item["chunk_id"]
+                if cid not in merged:
+                    merged[cid] = dict(item)
+                    merged[cid]["rrf_score"] = 0.0
+                    merged[cid]["vector_score"] = item.get("vector_score", 0.0)
+                    merged[cid]["bm25_score"] = item.get("bm25_score", 0.0)
+                else:
+                    if item.get("vector_score", 0.0) > merged[cid]["vector_score"]:
+                        merged[cid]["vector_score"] = item["vector_score"]
+                    if item.get("bm25_score", 0.0) > merged[cid]["bm25_score"]:
+                        merged[cid]["bm25_score"] = item.get("bm25_score", 0.0)
+
+                merged[cid]["rrf_score"] += 1.0 / (k + rank)
+
+        results = list(merged.values())
+        results.sort(key=lambda r: r["rrf_score"], reverse=True)
+        return results
+
+    # ------------------------------------------------------------------
+    # 查询改写
+    # ------------------------------------------------------------------
+
+    def _get_qp(self) -> QueryProcessor:
+        if self._query_processor is None:
+            self._query_processor = QueryProcessor()
+        return self._query_processor
+
+    # ------------------------------------------------------------------
+    # 向量检索辅助
+    # ------------------------------------------------------------------
+
+    def _vector_search(self, query_text: str, top_k: int) -> list[dict]:
+        """单次向量检索，返回标准化结果列表。"""
+        query_emb = self._encode([query_text])[0]
         vec_results = self._collection.query(
             query_embeddings=[query_emb],
             n_results=top_k,
@@ -206,41 +242,120 @@ class HybridRetriever:
         metas_list = vec_results.get("metadatas", [[]])[0]
         dists_list = vec_results.get("distances", [[]])[0]
 
+        results = []
         for i in range(len(ids_list)):
             meta = metas_list[i] if i < len(metas_list) else {}
             cid = meta.get("chunk_id", ids_list[i])
-            merged[cid] = {
+            results.append({
                 "text": docs_list[i] if i < len(docs_list) else "",
                 "page": meta.get("page"),
                 "source": meta.get("source", ""),
                 "chunk_id": cid,
                 "vector_score": round(1.0 - dists_list[i], 6) if i < len(dists_list) else 0.0,
                 "bm25_score": 0.0,
-            }
+                "rrf_score": 0.0,
+            })
+        return results
+
+    def _bm25_search(self, query_text: str, top_k: int) -> list[dict]:
+        """单次 BM25 检索，返回标准化结果列表。"""
+        if not self.bm25 or not self._all_texts:
+            return []
+
+        tokenized_query = list(jieba.cut(query_text))
+        scores = self.bm25.get_scores(tokenized_query)
+        k = min(top_k, len(scores))
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+
+        results = []
+        for idx in top_indices:
+            meta = self._all_metadatas[idx] if idx < len(self._all_metadatas) else {}
+            cid = meta.get("chunk_id", str(idx))
+            results.append({
+                "text": self._all_texts[idx] if idx < len(self._all_texts) else "",
+                "page": meta.get("page"),
+                "source": meta.get("source", ""),
+                "chunk_id": cid,
+                "vector_score": 0.0,
+                "bm25_score": round(float(scores[idx]), 6),
+                "rrf_score": 0.0,
+            })
+        return results
+
+    # ------------------------------------------------------------------
+    # 公开方法
+    # ------------------------------------------------------------------
+
+    def search(
+        self,
+        question: str,
+        top_k: int = DEFAULT_TOP_K,
+        use_reranker: bool = False,
+        use_rewrite: bool = False,
+        use_hyde: bool = False,
+    ) -> list[dict]:
+        """混合检索：向量 + BM25，RRF 融合后可选 Reranker 精排。
+
+        Args:
+            question: 查询文本。
+            top_k: 每路返回的最大结果数。
+            use_reranker: 使用 BGE-Reranker 对合并结果重排序。
+            use_rewrite: 使用 LLM 多视角改写查询增强向量检索。
+            use_hyde: 使用 HyDE 假设文档增强向量检索（需额外 LLM 调用）。
+
+        Returns:
+            字典列表，按 rrf_score 降序排列。
+            当 use_reranker=True 时额外包含 rerank_score，并按该分数降序排列。
+        """
+        if self._collection.count() == 0:
+            logger.warning("集合为空，返回空结果")
+            return []
+
+        result_lists: list[list[dict]] = []
+
+        # ── 向量检索（多查询） ────────────────────────────────────
+        vector_queries = [question]
+        if use_rewrite:
+            try:
+                variants = self._get_qp().rewrite_query(question, mode="multi_perspective")
+                vector_queries = variants
+                logger.info("查询改写为 %d 个变体", len(variants))
+            except Exception as e:
+                logger.warning("查询改写失败，回退到原始查询: %s", e)
+
+        for vq in vector_queries:
+            vec_results = self._vector_search(vq, top_k)
+            result_lists.append(vec_results)
+
+        # ── HyDE 向量检索 ─────────────────────────────────────────
+        if use_hyde:
+            try:
+                hyde_doc = self._get_qp().generate_hyde_document(question)
+                if hyde_doc:
+                    hyde_results = self._vector_search(hyde_doc, top_k)
+                    result_lists.append(hyde_results)
+            except Exception as e:
+                logger.warning("HyDE 检索失败: %s", e)
 
         # ── BM25 检索 ─────────────────────────────────────────────
-        if self.bm25 is not None and self._all_texts:
-            tokenized_query = list(jieba.cut(question))
-            scores = self.bm25.get_scores(tokenized_query)
-            k = min(top_k, len(scores))
-            top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+        bm25_query = question
+        if use_rewrite:
+            try:
+                keywords = self._get_qp().extract_keywords(question)
+                bm25_query = " ".join(keywords)
+                logger.info("BM25 查询关键词: %s", bm25_query)
+            except Exception as e:
+                logger.warning("关键词提取失败，使用原始查询: %s", e)
 
-            for idx in top_indices:
-                meta = self._all_metadatas[idx] if idx < len(self._all_metadatas) else {}
-                cid = meta.get("chunk_id", str(idx))
-                if cid in merged:
-                    merged[cid]["bm25_score"] = round(float(scores[idx]), 6)
-                else:
-                    merged[cid] = {
-                        "text": self._all_texts[idx] if idx < len(self._all_texts) else "",
-                        "page": meta.get("page"),
-                        "source": meta.get("source", ""),
-                        "chunk_id": cid,
-                        "vector_score": 0.0,
-                        "bm25_score": round(float(scores[idx]), 6),
-                    }
+        bm25_results = self._bm25_search(bm25_query, top_k)
+        if bm25_results:
+            result_lists.append(bm25_results)
 
-        results = list(merged.values())
+        # ── RRF 融合 ──────────────────────────────────────────────
+        if not result_lists:
+            return []
+
+        results = self._rrf_fuse(result_lists)
 
         # ── Reranker 重排序 ───────────────────────────────────────
         if use_reranker and results:
@@ -252,7 +367,7 @@ class HybridRetriever:
             results.sort(key=lambda r: r["rerank_score"], reverse=True)
             results = results[:top_k]
         else:
-            results.sort(key=lambda r: r["vector_score"], reverse=True)
+            results.sort(key=lambda r: r["rrf_score"], reverse=True)
 
         return results
 

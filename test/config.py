@@ -31,6 +31,11 @@ EMBEDDING_BATCH_LIMIT = 10    # 单次 API 最大文本数
 
 RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 
+# 查询处理 LLM（轻量、快速）
+QUERY_LLM_MODEL = "qwen-turbo"
+QUERY_LLM_TEMPERATURE = 0.3
+QUERY_LLM_MAX_TOKENS = 512
+
 # Modelscope 缓存路径
 MODELSCOPE_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".cache", "modelscope", "hub", "models"
@@ -54,7 +59,7 @@ CHUNK_SEPARATORS = ["\n\n", "\n", "。", ".", "！", "？", "；", ";", " ", ""]
 # 检索
 # ---------------------------------------------------------------------------
 
-DEFAULT_TOP_K = 10             # 检索默认返回数
+DEFAULT_TOP_K = 20             # 检索默认返回数（每路）
 RRF_K = 60                     # RRF 融合常数
 
 # ---------------------------------------------------------------------------

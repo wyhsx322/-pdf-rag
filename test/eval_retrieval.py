@@ -2,7 +2,12 @@
 检索效果评测脚本。
 
 对两篇已入库论文（demo1、demo2）运行 8 个测试查询，
-分别对比有/无 BGE-Reranker 的检索效果，
+对比四组检索策略的检索效果：
+  A 组 — RRF 融合（向量+BM25），无 Reranker，无查询改写
+  B 组 — RRF 融合 + BGE-Reranker，无查询改写
+  C 组 — RRF 融合 + 查询改写，无 Reranker
+  D 组 — RRF 融合 + 查询改写 + BGE-Reranker
+
 计算 Recall@K、Precision@K、MRR、NDCG@K 四项指标。
 
 用法::
@@ -235,88 +240,110 @@ def run_eval():
         else:
             search_collections = [collection]
 
-        # ── A 组：无 Reranker ──
-        results_no_rerank: list[dict] = []
+        # ── A 组：基线（RRF 融合，无改写，无 Reranker）─────────
+        results_a: list[dict] = []
         for col in search_collections:
             retriever = get_retriever(col)
-            results_no_rerank.extend(
-                retriever.search(query, top_k=DEFAULT_TOP_K, use_reranker=False)
+            results_a.extend(
+                retriever.search(query, top_k=DEFAULT_TOP_K,
+                                 use_reranker=False, use_rewrite=False)
             )
-        # 跨集合时按 vector_score 重新降序排列
-        results_no_rerank.sort(key=lambda r: r["vector_score"], reverse=True)
-        no_rerank_ids = [r["chunk_id"] for r in results_no_rerank]
-        metrics_a = compute_metrics(no_rerank_ids, relevant)
+        # 跨集合时按 rrf_score 重新降序排列
+        results_a.sort(key=lambda r: r.get("rrf_score", 0.0), reverse=True)
+        ids_a = [r["chunk_id"] for r in results_a]
+        metrics_a = compute_metrics(ids_a, relevant)
 
-        # ── B 组：有 Reranker ──
-        results_rerank: list[dict] = []
+        # ── B 组：Reranker（RRF + Reranker，无改写）─────────────
+        results_b: list[dict] = []
         for col in search_collections:
             retriever = get_retriever(col)
-            results_rerank.extend(
-                retriever.search(query, top_k=DEFAULT_TOP_K, use_reranker=True)
+            results_b.extend(
+                retriever.search(query, top_k=DEFAULT_TOP_K,
+                                 use_reranker=True, use_rewrite=False)
             )
-        # 跨集合时按 rerank_score 重新降序排列
-        results_rerank.sort(
-            key=lambda r: r.get("rerank_score", 0.0), reverse=True
-        )
-        rerank_ids = [r["chunk_id"] for r in results_rerank]
-        metrics_b = compute_metrics(rerank_ids, relevant)
+        results_b.sort(key=lambda r: r.get("rerank_score", r.get("rrf_score", 0.0)), reverse=True)
+        ids_b = [r["chunk_id"] for r in results_b]
+        metrics_b = compute_metrics(ids_b, relevant)
+
+        # ── C 组：改写（RRF + 查询改写，无 Reranker）────────────
+        results_c: list[dict] = []
+        for col in search_collections:
+            retriever = get_retriever(col)
+            results_c.extend(
+                retriever.search(query, top_k=DEFAULT_TOP_K,
+                                 use_reranker=False, use_rewrite=True)
+            )
+        results_c.sort(key=lambda r: r.get("rrf_score", 0.0), reverse=True)
+        ids_c = [r["chunk_id"] for r in results_c]
+        metrics_c = compute_metrics(ids_c, relevant)
+
+        # ── D 组：改写+Reranker（RRF + 查询改写 + Reranker）────
+        results_d: list[dict] = []
+        for col in search_collections:
+            retriever = get_retriever(col)
+            results_d.extend(
+                retriever.search(query, top_k=DEFAULT_TOP_K,
+                                 use_reranker=True, use_rewrite=True)
+            )
+        results_d.sort(key=lambda r: r.get("rerank_score", r.get("rrf_score", 0.0)), reverse=True)
+        ids_d = [r["chunk_id"] for r in results_d]
+        metrics_d = compute_metrics(ids_d, relevant)
 
         # ── 打印单查询对比 ──
-        print(f"\n{'指标':<16} {'无Reranker':>10} {'有Reranker':>10} {'变化':>10}")
-        print(f"{'-' * 16} {'-' * 10} {'-' * 10} {'-' * 10}")
+        col_names = ["A-基线", "B-Reranker", "C-改写", "D-改写+Reranker"]
+        all_metrics = [metrics_a, metrics_b, metrics_c, metrics_d]
+        print(f"\n{'指标':<16} " + " ".join(f"{n:>12}" for n in col_names))
+        print(f"{'-' * 16} " + " ".join(f"{'-' * 12}"))
         for key in metrics_a:
-            a_val = metrics_a[key]
-            b_val = metrics_b[key]
-            diff = b_val - a_val
-            direction = "+" if diff > 0 else ("-" if diff < 0 else "0")
-            print(f"{key:<16} {a_val:>10.4f} {b_val:>10.4f} {direction} {abs(diff):.4f}")
+            vals = [m[key] for m in all_metrics]
+            print(f"{key:<16} " + " ".join(f"{v:>12.4f}" for v in vals))
 
-        # ── 打印 Top-5 结果详情 ──
-        print(f"\n--- Top-5 无 Reranker ---")
-        for i, r in enumerate(results_no_rerank[:5], 1):
-            mark = "[+]" if r["chunk_id"] in relevant else " "
-            text_preview = r["text"][:80].replace("\n", " ")
-            print(
-                f"  [{mark}] #{i} {r['chunk_id']}  "
-                f"vec={r['vector_score']:.4f}  bm25={r['bm25_score']:.4f}  "
-                f"\"{text_preview}…\""
-            )
-
-        print(f"\n--- Top-5 有 Reranker ---")
-        for i, r in enumerate(results_rerank[:5], 1):
-            mark = "[+]" if r["chunk_id"] in relevant else " "
-            text_preview = r["text"][:80].replace("\n", " ")
-            rerank = r.get("rerank_score", float("nan"))
-            print(
-                f"  [{mark}] #{i} {r['chunk_id']}  "
-                f"rerank={rerank:.4f}  vec={r['vector_score']:.4f}  "
-                f"\"{text_preview}…\""
-            )
+        # ── 打印 Top-5 结果详情（每组） ──
+        for label, results in [("A-基线", results_a), ("B-Reranker", results_b),
+                                ("C-改写", results_c), ("D-改写+Reranker", results_d)]:
+            print(f"\n--- Top-5 {label} ---")
+            for i, r in enumerate(results[:5], 1):
+                mark = " [+]" if r["chunk_id"] in relevant else "    "
+                text_preview = r["text"][:80].replace("\n", " ")
+                rr = r.get("rerank_score")
+                rerank_str = f"rerank={rr:.4f}  " if rr is not None else ""
+                print(
+                    f"  [{mark}] #{i} {r['chunk_id']}  "
+                    f"{rerank_str}"
+                    f"rrf={r.get('rrf_score',0):.4f}  "
+                    f"\"{text_preview}…\""
+                )
 
         all_results.append({
             "qid": qid,
             "query": query,
             "description": desc,
             "relevant": relevant,
-            "metrics_no_rerank": metrics_a,
-            "metrics_rerank": metrics_b,
+            "metrics_a": metrics_a,
+            "metrics_b": metrics_b,
+            "metrics_c": metrics_c,
+            "metrics_d": metrics_d,
         })
 
     # ── 汇总 ──
+    n = len(all_results)
     print(f"\n{'=' * 70}")
-    print("汇总：平均指标对比")
+    print("汇总：平均指标对比（A=基线 B=Reranker C=改写 D=改写+Reranker）")
     print(f"{'=' * 70}")
 
     metric_keys = list(EVAL_METRIC_KEYS)
-    print(f"\n{'指标':<16} {'无Reranker':>10} {'有Reranker':>10} {'变化':>10}")
-    print(f"{'-' * 16} {'-' * 10} {'-' * 10} {'-' * 10}")
+    groups = [
+        ("A-基线", "metrics_a"),
+        ("B-Reranker", "metrics_b"),
+        ("C-改写", "metrics_c"),
+        ("D-改写+Reranker", "metrics_d"),
+    ]
 
+    print(f"\n{'指标':<16} " + " ".join(f"{n:>12}" for n, _ in groups))
+    print(f"{'-' * 16} " + " ".join(f"{'-' * 12}"))
     for key in metric_keys:
-        avg_a = sum(r[f"metrics_no_rerank"][key] for r in all_results) / len(all_results)
-        avg_b = sum(r[f"metrics_rerank"][key] for r in all_results) / len(all_results)
-        diff = avg_b - avg_a
-        direction = "↑" if diff > 0 else ("↓" if diff < 0 else "—")
-        print(f"{key:<16} {avg_a:>10.4f} {avg_b:>10.4f} {direction} {abs(diff):.4f}")
+        vals = [sum(r[gk][key] for r in all_results) / n for _, gk in groups]
+        print(f"{key:<16} " + " ".join(f"{v:>12.4f}" for v in vals))
 
     # 每查询逐个指标对比
     print(f"\n{'=' * 70}")
@@ -326,13 +353,10 @@ def run_eval():
         print(f"\n[{r['qid']}] {r['description']}")
         print(f"  查询: {r['query']}")
         print(f"  相关: {sorted(r['relevant'])}")
-        a = r["metrics_no_rerank"]
-        b = r["metrics_rerank"]
-        print(f"  {'指标':<16} {'无Reranker':>10} {'有Reranker':>10}")
+        print(f"  {'指标':<16} " + " ".join(f"{n:>12}" for n, _ in groups))
         for key in metric_keys:
-            print(f"  {key:<16} {a[key]:>10.4f} {b[key]:>10.4f}")
-
-    print()
+            vals = [r[gk][key] for _, gk in groups]
+            print(f"  {key:<16} " + " ".join(f"{v:>12.4f}" for v in vals))
 
 
 if __name__ == "__main__":

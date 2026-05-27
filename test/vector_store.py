@@ -142,14 +142,14 @@ class VectorStoreManager:
         ids: list[str] = []
         metadatas: list[dict] = []
         for chunk in chunks:
-            meta = chunk.get("metadata", {})
+            meta = dict(chunk.get("metadata", {}))  # 复制所有元数据字段
             cid = meta.get("chunk_id", str(uuid.uuid4()))
             ids.append(cid)
-            metadatas.append({
-                "page": int(chunk["page"]),
-                "source": source,
-                "chunk_id": cid,
-            })
+            # 合并标准字段（保留 meta 中的自定义字段）
+            meta["page"] = int(chunk["page"])
+            meta["source"] = source
+            meta["chunk_id"] = cid
+            metadatas.append(meta)
 
         self._collection.add(
             ids=ids,

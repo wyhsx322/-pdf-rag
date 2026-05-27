@@ -36,6 +36,13 @@ QUERY_LLM_MODEL = "qwen-turbo"
 QUERY_LLM_TEMPERATURE = 0.3
 QUERY_LLM_MAX_TOKENS = 512
 
+# 多模态视觉模型（图片摘要）
+VL_API_KEY_ENV = "DASHSCOPE_API_KEY"
+VL_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+VL_MODEL = "qwen-vl-plus"
+VL_TEMPERATURE = 0.3
+VL_MAX_TOKENS = 800
+
 # Modelscope 缓存路径
 MODELSCOPE_CACHE_DIR = os.path.join(
     os.path.expanduser("~"), ".cache", "modelscope", "hub", "models"
@@ -54,6 +61,20 @@ MAX_RETRIES = 3
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 CHUNK_SEPARATORS = ["\n\n", "\n", "。", ".", "！", "？", "；", ";", " ", ""]
+
+# 参考文献节标题正则模式（用于分块前删除文献部分）
+# 以 # 开头（1-4 级标题），后跟参考/注释/引用相关关键词
+REFERENCE_SECTION_PATTERNS = [
+    r'^#{1,4}\s*参考文献',          # ### 参考文献:, #### 参考文献 [References]
+    r'^#{1,4}\s*參考文獻',          # 繁体
+    r'^#{1,4}\s*References',       # ### References
+    r'^#{1,4}\s*Bibliography',     # ### Bibliography
+    r'^#{1,4}\s*注释\s*($|\[|:)',  # ### 注释:, ### 注释 [Note]
+    r'^#{1,4}\s*注釋\s*($|\[|:)',  # 繁体
+    r'^#{1,4}\s*Notes\s*($|\[|:)', # ### Notes
+    r'^#{1,4}\s*引用文献',          # ### 引用文献
+    r'^#{1,4}\s*参考书目',          # ### 参考书目
+]
 
 # ---------------------------------------------------------------------------
 # 检索
@@ -78,6 +99,22 @@ OUTPUT_SPLIT_DIR = "output/split_demo"
 OUTPUT_CHROMA_DIR = "output/chroma_demo"
 
 COLLECTION_NAME_SUFFIX = "_papers"  # 集合名: <name>_papers
+
+HASH_REGISTRY_FILE = "output/file_hash_registry.json"  # 文件哈希注册表
+HASH_ALGORITHM = "sha256"  # 哈希算法
+
+# ---------------------------------------------------------------------------
+# RAG 生成
+# ---------------------------------------------------------------------------
+
+RAG_LLM_API_KEY_ENV = "DEEPSEEK_API_KEY"
+RAG_LLM_BASE_URL = "https://api.deepseek.com/v1"
+RAG_LLM_MODEL = "deepseek-chat"
+RAG_LLM_TEMPERATURE = 0.3
+RAG_LLM_MAX_TOKENS = 1024
+RAG_MAX_CONTEXT_CHUNKS = 8        # 最多送入 LLM 的文本块数
+RAG_MAX_CONTEXT_CHARS = 8000      # 上下文总字符数上限
+RAG_REQUEST_TIMEOUT = 60          # API 请求超时（秒）
 
 # ---------------------------------------------------------------------------
 # 评测

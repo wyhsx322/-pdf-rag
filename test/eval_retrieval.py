@@ -2,17 +2,19 @@
 检索效果评测脚本。
 
 对两篇已入库论文（demo1、demo2）运行 8 个测试查询，
-对比四组检索策略的检索效果：
-  A 组 — RRF 融合（向量+BM25），无 Reranker，无查询改写
-  B 组 — RRF 融合 + BGE-Reranker，无查询改写
-  C 组 — RRF 融合 + 查询改写，无 Reranker
-  D 组 — RRF 融合 + 查询改写 + BGE-Reranker
+对比检索策略的检索效果：
+  A 组 — RRF 融合（向量+BM25），无查询改写
+  C 组 — RRF 融合 + 查询改写（推荐策略）
+
+可选启用 B/D 组（BGE-Reranker）：
+  python -m test.eval_retrieval --with-reranker
 
 计算 Recall@K、Precision@K、MRR、NDCG@K 四项指标。
 
 用法::
 
     python -m test.eval_retrieval
+    python -m test.eval_retrieval --with-reranker
 """
 
 import math
@@ -43,7 +45,7 @@ TEST_QUERIES = [
         "id": "Q1",
         "query": "建设性沟通与政务健康信息采纳",
         "collection": "demo1",
-        "ground_truth": ["p1_c1"],  # 标题+摘要（chunk_size=1000 整个首页在一个 chunk 中）
+        "ground_truth": ["p1_c1"],
         "description": "demo1 标题精确匹配",
     },
     {
@@ -51,9 +53,9 @@ TEST_QUERIES = [
         "query": "fsQCA 方法在健康传播中的应用",
         "collection": "demo1",
         "ground_truth": [
-            "p8_c1",   # (二) 研究方法 — fsQCA 方法描述
-            "p11_c1",  # #### 四、数据分析 + 必要条件分析
-            "p11_c3",  # 条件组态的充分性分析
+            "p8_c1",
+            "p11_c1",
+            "p11_c3",
         ],
         "description": "demo1 方法检索",
     },
@@ -62,10 +64,10 @@ TEST_QUERIES = [
         "query": "政务微博健康信息的用户采纳影响因素",
         "collection": "demo1",
         "ground_truth": [
-            "p1_c1",   # 内容提要 — 六类建设性沟通方式与决策环境因素
-            "p2_c1",   # 健康信息采纳行为的解释性研究现状
-            "p6_c1",   # 研究问题 + (三) "稳定"的决策环境框架（信息供给侧/需求侧）
-            "p7_c1",   # 健康资源禀赋侧 + 研究空白
+            "p1_c1",
+            "p2_c1",
+            "p6_c1",
+            "p7_c1",
         ],
         "description": "demo1 概念检索",
     },
@@ -74,9 +76,9 @@ TEST_QUERIES = [
         "query": "建设性沟通的策略场景化讨论",
         "collection": "demo1",
         "ground_truth": [
-            "p14_c1",  # #### 五、建设性沟通策略场景化讨论 + (一) 信念建构策略
-            "p15_c1",  # (二) 态度建构策略（科学可行）
-            "p15_c2",  # (三) 行动建构策略（热唤醒/冷推理/消解迷茫）
+            "p14_c1",
+            "p15_c1",
+            "p15_c2",
         ],
         "description": "demo1 章节标题检索",
     },
@@ -85,7 +87,7 @@ TEST_QUERIES = [
         "query": "电子游戏对外传播效果",
         "collection": "demo2",
         "ground_truth": [
-            "p1_c1",   # 标题+副标题+内容提要+关键词
+            "p1_c1",
         ],
         "description": "demo2 标题精确匹配",
     },
@@ -94,8 +96,8 @@ TEST_QUERIES = [
         "query": "Twitter 情感分析 LDA 主题建模",
         "collection": "demo2",
         "ground_truth": [
-            "p8_c1",   # ## 三、研究过程 — 大数据技术+情感和主题分析+OSI模型
-            "p10_c1",  # (二) 推文主题分析 — LDA 算法主题建模
+            "p8_c1",
+            "p10_c1",
         ],
         "description": "demo2 方法检索",
     },
@@ -104,11 +106,11 @@ TEST_QUERIES = [
         "query": "OSI 七层模型传播学应用",
         "collection": "demo2",
         "ground_truth": [
-            "p4_c1",   # (二) 传播的 OSI 七层模型 — 理论引入
-            "p4_c2",   # 应用层(application layer)
-            "p5_c1",   # 表示层(presentation layer) + 会话层(session layer)
-            "p5_c2",   # OSI 理论总结 + 数据链路层
-            "p6_c1",   # 图2 + 物理层 + OSI 模型传播学应用 + TCP/UDP
+            "p4_c1",
+            "p4_c2",
+            "p5_c1",
+            "p5_c2",
+            "p6_c1",
         ],
         "description": "demo2 理论框架检索",
     },
@@ -117,17 +119,17 @@ TEST_QUERIES = [
         "query": "跨文化传播中的国家形象建构",
         "collection": "both",
         "ground_truth": [
-            "demo1_p1_c1",   # demo1 摘要 — 健康沟通与全民健康意义建构
-            "demo2_p1_c1",   # demo2 摘要 — 跨文化传播与国家形象
-            "demo2_p2_c2",   # 国家文化传播 → 构建正面国家形象
-            "demo2_p15_c1",  # 国际刻板印象 + 《原神》改善涉华舆论态度
+            "demo1_p1_c1",
+            "demo2_p1_c1",
+            "demo2_p2_c2",
+            "demo2_p15_c1",
         ],
         "description": "跨论文概念检索",
     },
 ]
 
 # 路径配置
-BASE = Path(__file__).parent.parent  # D:\pythonProject\PDF_1.0
+BASE = Path(__file__).parent.parent
 COLLECTION_CONFIG = {
     "demo1": {
         "chroma_path": str(BASE / OUTPUT_CHROMA_DIR / "demo1"),
@@ -199,15 +201,14 @@ def expand_ground_truth(collection: str, short_ids: list[str]) -> set[str]:
     """将短格式 chunk_id 展开为完整格式。"""
     result = []
     for sid in short_ids:
-        if sid.startswith("demo"):  # 已是完整格式（跨论文查询）
+        if sid.startswith("demo"):
             result.append(sid)
         else:
             result.append(f"{collection}_{sid}")
     return set(result)
 
 
-def run_eval():
-    # 懒加载 retriever 缓存
+def run_eval(with_reranker: bool = False):
     retrievers: dict[str, HybridRetriever] = {}
 
     def get_retriever(name: str) -> HybridRetriever:
@@ -234,73 +235,85 @@ def run_eval():
         print(f"相关chunk ({len(relevant)}): {sorted(relevant)}")
         print(f"{'=' * 70}")
 
-        # 确定要查询的集合
         if collection == "both":
             search_collections = ["demo1", "demo2"]
         else:
             search_collections = [collection]
 
-        # ── A 组：基线（RRF 融合，无改写，无 Reranker）─────────
+        # ── A 组：基线（RRF 融合，无改写）─────────────────────────
         results_a: list[dict] = []
         for col in search_collections:
             retriever = get_retriever(col)
             results_a.extend(
                 retriever.search(query, top_k=DEFAULT_TOP_K,
-                                 use_reranker=False, use_rewrite=False)
+                                 use_rewrite=False)
             )
-        # 跨集合时按 rrf_score 重新降序排列
         results_a.sort(key=lambda r: r.get("rrf_score", 0.0), reverse=True)
         ids_a = [r["chunk_id"] for r in results_a]
         metrics_a = compute_metrics(ids_a, relevant)
 
-        # ── B 组：Reranker（RRF + Reranker，无改写）─────────────
-        results_b: list[dict] = []
-        for col in search_collections:
-            retriever = get_retriever(col)
-            results_b.extend(
-                retriever.search(query, top_k=DEFAULT_TOP_K,
-                                 use_reranker=True, use_rewrite=False)
-            )
-        results_b.sort(key=lambda r: r.get("rerank_score", r.get("rrf_score", 0.0)), reverse=True)
-        ids_b = [r["chunk_id"] for r in results_b]
-        metrics_b = compute_metrics(ids_b, relevant)
-
-        # ── C 组：改写（RRF + 查询改写，无 Reranker）────────────
+        # ── C 组：RRF + 查询改写（推荐策略）──────────────────────
         results_c: list[dict] = []
         for col in search_collections:
             retriever = get_retriever(col)
             results_c.extend(
                 retriever.search(query, top_k=DEFAULT_TOP_K,
-                                 use_reranker=False, use_rewrite=True)
+                                 use_rewrite=True)
             )
         results_c.sort(key=lambda r: r.get("rrf_score", 0.0), reverse=True)
         ids_c = [r["chunk_id"] for r in results_c]
         metrics_c = compute_metrics(ids_c, relevant)
 
-        # ── D 组：改写+Reranker（RRF + 查询改写 + Reranker）────
-        results_d: list[dict] = []
-        for col in search_collections:
-            retriever = get_retriever(col)
-            results_d.extend(
-                retriever.search(query, top_k=DEFAULT_TOP_K,
-                                 use_reranker=True, use_rewrite=True)
-            )
-        results_d.sort(key=lambda r: r.get("rerank_score", r.get("rrf_score", 0.0)), reverse=True)
-        ids_d = [r["chunk_id"] for r in results_d]
-        metrics_d = compute_metrics(ids_d, relevant)
+        # ── 可选：B/D 组（Reranker）──────────────────────────────
+        metrics_b, metrics_d = {}, {}
+        ids_b, ids_d = [], []
+        results_b, results_d = [], []
+
+        if with_reranker:
+            results_b = []
+            for col in search_collections:
+                retriever = get_retriever(col)
+                results_b.extend(
+                    retriever.search(query, top_k=DEFAULT_TOP_K,
+                                     use_reranker=True, use_rewrite=False)
+                )
+            results_b.sort(key=lambda r: r.get("rerank_score", r.get("rrf_score", 0.0)), reverse=True)
+            ids_b = [r["chunk_id"] for r in results_b]
+            metrics_b = compute_metrics(ids_b, relevant)
+
+            results_d = []
+            for col in search_collections:
+                retriever = get_retriever(col)
+                results_d.extend(
+                    retriever.search(query, top_k=DEFAULT_TOP_K,
+                                     use_reranker=True, use_rewrite=True)
+                )
+            results_d.sort(key=lambda r: r.get("rerank_score", r.get("rrf_score", 0.0)), reverse=True)
+            ids_d = [r["chunk_id"] for r in results_d]
+            metrics_d = compute_metrics(ids_d, relevant)
 
         # ── 打印单查询对比 ──
-        col_names = ["A-基线", "B-Reranker", "C-改写", "D-改写+Reranker"]
-        all_metrics = [metrics_a, metrics_b, metrics_c, metrics_d]
-        print(f"\n{'指标':<16} " + " ".join(f"{n:>12}" for n in col_names))
-        print(f"{'-' * 16} " + " ".join(f"{'-' * 12}"))
-        for key in metrics_a:
-            vals = [m[key] for m in all_metrics]
-            print(f"{key:<16} " + " ".join(f"{v:>12.4f}" for v in vals))
+        if with_reranker:
+            col_names = ["A-基线(RRF)", "B-Reranker", "C-RRF+改写", "D-改写+Reranker"]
+            all_metrics = [metrics_a, metrics_b, metrics_c, metrics_d]
+        else:
+            col_names = ["A-基线(RRF)", "C-RRF+改写"]
+            all_metrics = [metrics_a, metrics_c]
 
-        # ── 打印 Top-5 结果详情（每组） ──
-        for label, results in [("A-基线", results_a), ("B-Reranker", results_b),
-                                ("C-改写", results_c), ("D-改写+Reranker", results_d)]:
+        print(f"\n{'指标':<16} " + " ".join(f"{n:>16}" for n in col_names))
+        print(f"{'-' * 16} " + " ".join(f"{'-' * 16}"))
+        for key in sorted(metrics_a):
+            vals = [m.get(key, 0.0) for m in all_metrics]
+            print(f"{key:<16} " + " ".join(f"{v:>16.4f}" for v in vals))
+
+        # ── 打印 Top-5 结果详情 ──
+        detail_groups = [("A-基线(RRF)", results_a), ("C-RRF+改写", results_c)]
+        if with_reranker:
+            detail_groups += [("B-Reranker", results_b), ("D-改写+Reranker", results_d)]
+
+        for label, results in detail_groups:
+            if not results:
+                continue
             print(f"\n--- Top-5 {label} ---")
             for i, r in enumerate(results[:5], 1):
                 mark = " [+]" if r["chunk_id"] in relevant else "    "
@@ -320,30 +333,41 @@ def run_eval():
             "description": desc,
             "relevant": relevant,
             "metrics_a": metrics_a,
-            "metrics_b": metrics_b,
             "metrics_c": metrics_c,
-            "metrics_d": metrics_d,
+            "metrics_b": metrics_b if with_reranker else {},
+            "metrics_d": metrics_d if with_reranker else {},
         })
 
     # ── 汇总 ──
     n = len(all_results)
+    groups = [
+        ("A-基线(RRF)", "metrics_a"),
+        ("C-RRF+改写", "metrics_c"),
+    ]
+    if with_reranker:
+        groups += [
+            ("B-Reranker", "metrics_b"),
+            ("D-改写+Reranker", "metrics_d"),
+        ]
+
     print(f"\n{'=' * 70}")
-    print("汇总：平均指标对比（A=基线 B=Reranker C=改写 D=改写+Reranker）")
+    title = "汇总：平均指标对比"
+    if with_reranker:
+        title += "（A=RFF B=Reranker C=RRF+改写 D=改写+Reranker）"
+    else:
+        title += "（A=RFF基线 C=RRF+改写★推荐）"
+    print(title)
     print(f"{'=' * 70}")
 
     metric_keys = list(EVAL_METRIC_KEYS)
-    groups = [
-        ("A-基线", "metrics_a"),
-        ("B-Reranker", "metrics_b"),
-        ("C-改写", "metrics_c"),
-        ("D-改写+Reranker", "metrics_d"),
-    ]
 
-    print(f"\n{'指标':<16} " + " ".join(f"{n:>12}" for n, _ in groups))
-    print(f"{'-' * 16} " + " ".join(f"{'-' * 12}"))
+    print(f"\n{'指标':<16} " + " ".join(f"{n:>16}" for n, _ in groups))
+    print(f"{'-' * 16} " + " ".join(f"{'-' * 16}"))
     for key in metric_keys:
-        vals = [sum(r[gk][key] for r in all_results) / n for _, gk in groups]
-        print(f"{key:<16} " + " ".join(f"{v:>12.4f}" for v in vals))
+        vals = []
+        for _, gk in groups:
+            vals.append(sum(r[gk][key] for r in all_results if gk in r and r[gk]) / n)
+        print(f"{key:<16} " + " ".join(f"{v:>16.4f}" for v in vals))
 
     # 每查询逐个指标对比
     print(f"\n{'=' * 70}")
@@ -353,11 +377,15 @@ def run_eval():
         print(f"\n[{r['qid']}] {r['description']}")
         print(f"  查询: {r['query']}")
         print(f"  相关: {sorted(r['relevant'])}")
-        print(f"  {'指标':<16} " + " ".join(f"{n:>12}" for n, _ in groups))
+        print(f"  {'指标':<16} " + " ".join(f"{n:>16}" for n, _ in groups))
         for key in metric_keys:
-            vals = [r[gk][key] for _, gk in groups]
-            print(f"  {key:<16} " + " ".join(f"{v:>12.4f}" for v in vals))
+            vals = [r[gk][key] for _, gk in groups if gk in r and r[gk]]
+            print(f"  {key:<16} " + " ".join(f"{v:>16.4f}" for v in vals))
 
 
 if __name__ == "__main__":
-    run_eval()
+    with_reranker = "--with-reranker" in sys.argv
+    if with_reranker:
+        print("注意: BGE-Reranker 在学术论文场景下可能降低召回率。")
+        print()
+    run_eval(with_reranker=with_reranker)

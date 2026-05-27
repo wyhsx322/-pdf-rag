@@ -7,6 +7,7 @@
 
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
@@ -65,6 +66,28 @@ def _resolve_modelscope_path(model_name: str) -> str:
         ) from e
 
 
+# ── 模块级 Reranker 单例 ────────────────────────────────────────────
+_reranker_singleton: Optional[CrossEncoder] = None
+_reranker_lock = threading.Lock()
+
+
+def _get_reranker() -> CrossEncoder:
+    """线程安全的 Reranker 单例加载，所有 HybridRetriever 实例共享。"""
+    global _reranker_singleton
+    if _reranker_singleton is None:
+        with _reranker_lock:
+            if _reranker_singleton is None:
+                model_path = _resolve_modelscope_path(RERANKER_MODEL)
+                _reranker_singleton = CrossEncoder(model_path)
+                logger.info("Reranker 单例模型已加载")
+    return _reranker_singleton
+
+
+# ── 模块级 BM25 缓存 ────────────────────────────────────────────────
+# key: f"{chroma_path}/{collection_name}" → (count, BM25Okapi, texts, metadatas)
+_bm25_cache: dict[str, tuple[int, object, list[str], list[dict]]] = {}
+
+
 class HybridRetriever:
     """混合检索器：向量相似度 + BM25 关键词，可选 BGE-Reranker 重排序。
 
@@ -90,6 +113,7 @@ class HybridRetriever:
         self._model_name = embedding_model_name
         self._reranker_model_name = reranker_model_name
         self._reranker: Optional[CrossEncoder] = None
+        self._chroma_path = chroma_path
 
         api_key = os.environ.get(DASHSCOPE_API_KEY_ENV, "")
         if not api_key:
@@ -145,7 +169,11 @@ class HybridRetriever:
                     raise
 
     def _build_bm25_index(self):
-        """从 ChromaDB 全量读取文档，用 jieba 分词后构建 BM25Okapi 索引。"""
+        """从 ChromaDB 全量读取文档，用 jieba 分词后构建 BM25Okapi 索引。
+
+        以 chroma_path + collection_name 为键缓存，count 一致则直接复用。
+        """
+        cache_key = f"{self._chroma_path}/{self._collection.name}"
         count = self._collection.count()
         if count == 0:
             logger.warning("集合为空，跳过 BM25 索引构建")
@@ -154,25 +182,26 @@ class HybridRetriever:
             self._all_metadatas = []
             return
 
+        cached = _bm25_cache.get(cache_key)
+        if cached and cached[0] == count:
+            _, self.bm25, self._all_texts, self._all_metadatas = cached
+            logger.info("BM25 缓存命中: %s (%d 篇)", cache_key, count)
+            return
+
         data = self._collection.get(include=["documents", "metadatas"])
         self._all_texts = data.get("documents", []) or []
         self._all_metadatas = data.get("metadatas", []) or []
 
         tokenized = [list(jieba.cut(t)) for t in self._all_texts]
         self.bm25 = BM25Okapi(tokenized)
-        logger.info("BM25 索引已构建，共 %d 篇文档", len(tokenized))
+        _bm25_cache[cache_key] = (count, self.bm25, self._all_texts, self._all_metadatas)
+        logger.info("BM25 索引已构建并缓存: %s (%d 篇)", cache_key, len(tokenized))
 
     def _load_reranker(self):
-        """延迟加载 BGE-Reranker cross-encoder 模型。
-
-        优先从 Modelscope 本地缓存加载，缓存未命中时自动下载。
-        """
+        """延迟加载 BGE-Reranker cross-encoder 模型（模块级单例共享）。"""
         if self._reranker is not None:
             return
-        logger.info("加载 Reranker 模型: %s", self._reranker_model_name)
-        model_path = _resolve_modelscope_path(self._reranker_model_name or RERANKER_MODEL)
-        self._reranker = CrossEncoder(model_path)
-        logger.info("Reranker 模型就绪")
+        self._reranker = _get_reranker()
 
     # ------------------------------------------------------------------
     # RRF 融合
@@ -246,7 +275,7 @@ class HybridRetriever:
         for i in range(len(ids_list)):
             meta = metas_list[i] if i < len(metas_list) else {}
             cid = meta.get("chunk_id", ids_list[i])
-            results.append({
+            result = {
                 "text": docs_list[i] if i < len(docs_list) else "",
                 "page": meta.get("page"),
                 "source": meta.get("source", ""),
@@ -254,7 +283,15 @@ class HybridRetriever:
                 "vector_score": round(1.0 - dists_list[i], 6) if i < len(dists_list) else 0.0,
                 "bm25_score": 0.0,
                 "rrf_score": 0.0,
-            })
+            }
+            if meta.get("type") == "figure":
+                result["is_figure"] = True
+                result["image_file"] = meta.get("image_file")
+                result["image_path"] = meta.get("image_path")
+                result["figure_number"] = meta.get("figure_number")
+                result["caption"] = meta.get("caption")
+                result["figure_type"] = meta.get("figure_type")
+            results.append(result)
         return results
 
     def _bm25_search(self, query_text: str, top_k: int) -> list[dict]:
@@ -271,7 +308,7 @@ class HybridRetriever:
         for idx in top_indices:
             meta = self._all_metadatas[idx] if idx < len(self._all_metadatas) else {}
             cid = meta.get("chunk_id", str(idx))
-            results.append({
+            result = {
                 "text": self._all_texts[idx] if idx < len(self._all_texts) else "",
                 "page": meta.get("page"),
                 "source": meta.get("source", ""),
@@ -279,7 +316,15 @@ class HybridRetriever:
                 "vector_score": 0.0,
                 "bm25_score": round(float(scores[idx]), 6),
                 "rrf_score": 0.0,
-            })
+            }
+            if meta.get("type") == "figure":
+                result["is_figure"] = True
+                result["image_file"] = meta.get("image_file")
+                result["image_path"] = meta.get("image_path")
+                result["figure_number"] = meta.get("figure_number")
+                result["caption"] = meta.get("caption")
+                result["figure_type"] = meta.get("figure_type")
+            results.append(result)
         return results
 
     # ------------------------------------------------------------------
@@ -291,8 +336,11 @@ class HybridRetriever:
         question: str,
         top_k: int = DEFAULT_TOP_K,
         use_reranker: bool = False,
-        use_rewrite: bool = False,
+        use_rewrite: bool = True,
         use_hyde: bool = False,
+        query_variants: Optional[list[str]] = None,
+        keywords: Optional[list[str]] = None,
+        hyde_doc: Optional[str] = None,
     ) -> list[dict]:
         """混合检索：向量 + BM25，RRF 融合后可选 Reranker 精排。
 
@@ -302,6 +350,9 @@ class HybridRetriever:
             use_reranker: 使用 BGE-Reranker 对合并结果重排序。
             use_rewrite: 使用 LLM 多视角改写查询增强向量检索。
             use_hyde: 使用 HyDE 假设文档增强向量检索（需额外 LLM 调用）。
+            query_variants: 预计算的查询变体列表（含原始查询），传入时跳过 LLM 改写。
+            keywords: 预计算的关键词列表，传入时跳过 LLM 关键词提取。
+            hyde_doc: 预计算的 HyDE 假设文档，传入时跳过 LLM HyDE 生成。
 
         Returns:
             字典列表，按 rrf_score 降序排列。
@@ -313,43 +364,58 @@ class HybridRetriever:
 
         result_lists: list[list[dict]] = []
 
-        # ── 向量检索（多查询） ────────────────────────────────────
-        vector_queries = [question]
-        if use_rewrite:
+        # ── 构建查询列表（始终包含原始查询） ──────────────────────
+        all_queries = [question]
+        if query_variants is not None:
+            for v in query_variants[1:]:
+                if v not in all_queries:
+                    all_queries.append(v)
+            logger.info("使用预计算查询变体: %d 个（含原始）", len(query_variants))
+        elif use_rewrite:
             try:
                 variants = self._get_qp().rewrite_query(question, mode="multi_perspective")
-                vector_queries = variants
-                logger.info("查询改写为 %d 个变体", len(variants))
+                for v in variants[1:]:  # variants[0] 是原始 query
+                    if v not in all_queries:
+                        all_queries.append(v)
+                logger.info("查询改写为 %d 个变体（含原始 = %d）", len(variants), len(all_queries))
             except Exception as e:
                 logger.warning("查询改写失败，回退到原始查询: %s", e)
 
-        for vq in vector_queries:
-            vec_results = self._vector_search(vq, top_k)
+        # ── 每个查询：向量 + BM25 检索 ────────────────────────────
+        for q in all_queries:
+            vec_results = self._vector_search(q, top_k)
             result_lists.append(vec_results)
+            bm25_results = self._bm25_search(q, top_k)
+            if bm25_results:
+                result_lists.append(bm25_results)
+
+        # ── 额外：关键词 BM25（精准匹配增强） ──────────────────────
+        kw_list = keywords
+        if kw_list is None and use_rewrite:
+            try:
+                kw_list = self._get_qp().extract_keywords(question)
+            except Exception as e:
+                logger.warning("关键词提取失败: %s", e)
+
+        if kw_list:
+            kw_query = " ".join(kw_list)
+            if kw_query and kw_query not in all_queries:
+                kw_results = self._bm25_search(kw_query, top_k)
+                if kw_results:
+                    result_lists.append(kw_results)
+                    logger.info("关键词 BM25: %s", kw_query)
 
         # ── HyDE 向量检索 ─────────────────────────────────────────
-        if use_hyde:
+        hyde_text = hyde_doc
+        if hyde_text is None and use_hyde:
             try:
-                hyde_doc = self._get_qp().generate_hyde_document(question)
-                if hyde_doc:
-                    hyde_results = self._vector_search(hyde_doc, top_k)
-                    result_lists.append(hyde_results)
+                hyde_text = self._get_qp().generate_hyde_document(question)
             except Exception as e:
                 logger.warning("HyDE 检索失败: %s", e)
 
-        # ── BM25 检索 ─────────────────────────────────────────────
-        bm25_query = question
-        if use_rewrite:
-            try:
-                keywords = self._get_qp().extract_keywords(question)
-                bm25_query = " ".join(keywords)
-                logger.info("BM25 查询关键词: %s", bm25_query)
-            except Exception as e:
-                logger.warning("关键词提取失败，使用原始查询: %s", e)
-
-        bm25_results = self._bm25_search(bm25_query, top_k)
-        if bm25_results:
-            result_lists.append(bm25_results)
+        if hyde_text:
+            hyde_results = self._vector_search(hyde_text, top_k)
+            result_lists.append(hyde_results)
 
         # ── RRF 融合 ──────────────────────────────────────────────
         if not result_lists:

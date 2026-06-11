@@ -51,12 +51,17 @@ class BatchEvent:
 class DocumentProcessor:
     """文档流水线处理器，绑定一个知识库。
 
+    使用 KB 级别 ChromaDB 集合（单集合架构）：同一知识库的所有文档共享
+    一个向量集合，通过 metadata 中的 ``doc_id`` 字段区分文档来源。
+
     Args:
         kb_name: 知识库名称（对应 primary_datas/{kb_name}/ 目录）。
+        kb_id: 知识库 ID，用于 KB 级别集合命名。
     """
 
-    def __init__(self, kb_name: str):
+    def __init__(self, kb_name: str, kb_id: int = 0):
         self.kb_name = kb_name
+        self.kb_id = kb_id
 
     # ──────────────────────────────────────
     # 路径解析
@@ -89,13 +94,15 @@ class DocumentProcessor:
         dn = self.doc_dir_name(doc_id)
         return PROJECT_ROOT / OUTPUT_SPLIT_DIR / dn / f"{dn}.json"
 
-    def chroma_dir(self, doc_id: int) -> Path:
-        """ChromaDB 持久化目录: ``output/chroma_demo/doc_{doc_id}/``"""
-        return PROJECT_ROOT / OUTPUT_CHROMA_DIR / self.doc_dir_name(doc_id)
+    def chroma_dir(self) -> Path:
+        """KB 级别 ChromaDB 持久化目录: ``output/chroma_demo/kb_{kb_id}/``"""
+        from .pipeline import kb_chroma_dir
+        return kb_chroma_dir(self.kb_id)
 
-    def collection_name(self, doc_id: int) -> str:
-        """ChromaDB 集合名: ``doc_{doc_id}_papers``"""
-        return f"{self.doc_dir_name(doc_id)}{COLLECTION_NAME_SUFFIX}"
+    def collection_name(self) -> str:
+        """KB 级别 ChromaDB 集合名: ``kb_{kb_id}_papers``"""
+        from .pipeline import kb_collection_name
+        return kb_collection_name(self.kb_id)
 
     # ──────────────────────────────────────
     # 流水线步骤
@@ -147,19 +154,20 @@ class DocumentProcessor:
         return chunks
 
     def step3_chunks_to_db(self, doc_id: int) -> None:
-        """分块 → 向量编码 → ChromaDB 入库。"""
+        """分块 → 向量编码 → KB 级别 ChromaDB 入库。"""
         from .pipeline import step3_chunks_to_db
 
         chunks = self.chunks_path(doc_id)
         if not chunks.exists():
             raise FileNotFoundError(f"分块文件不存在: {chunks}")
-        logger.info("[3/3] 向量化入库: %s", chunks)
+        logger.info("[3/3] 向量化入库: %s (KB %d)", chunks, self.kb_id)
         step3_chunks_to_db(
             chunks,
-            db_path=str(self.chroma_dir(doc_id)),
-            collection_name=self.collection_name(doc_id),
+            db_path=str(self.chroma_dir()),
+            collection_name=self.collection_name(),
             source=self.doc_dir_name(doc_id),
             md_dir=self.md_dir(doc_id),
+            doc_id=doc_id,
         )
 
     # ──────────────────────────────────────
@@ -311,15 +319,15 @@ class DocumentProcessor:
     # ──────────────────────────────────────
 
     def get_vector_stats(self, doc_id: int) -> dict:
-        """获取文档的向量库统计信息。
+        """获取文档在 KB 级别向量库中的统计信息。
 
         Returns:
             包含 doc_id, collection_name, collection_exists, vector_count 的字典。
         """
         import chromadb
 
-        collection_name = self.collection_name(doc_id)
-        chroma_dir = str(self.chroma_dir(doc_id))
+        collection_name = self.collection_name()
+        chroma_dir = str(self.chroma_dir())
 
         stats = {
             "doc_id": doc_id,
@@ -331,49 +339,47 @@ class DocumentProcessor:
         if Path(chroma_dir).exists():
             try:
                 client = chromadb.PersistentClient(path=chroma_dir)
-                collections = client.list_collections()
-                for col in collections:
-                    if col.name == collection_name:
-                        stats["collection_exists"] = True
-                        stats["vector_count"] = col.count()
-                        break
+                col = client.get_collection(collection_name)
+                if col:
+                    stats["collection_exists"] = True
+                    # 统计该文档的向量数
+                    result = col.get(where={"doc_id": doc_id}, include=[])
+                    stats["vector_count"] = len(result["ids"]) if result["ids"] else 0
             except Exception as e:
                 logger.warning("获取向量统计失败: %s", e)
 
         return stats
 
     def delete_vectors(self, doc_id: int) -> bool:
-        """删除文档的向量库数据。
+        """从 KB 级别集合中删除文档的向量数据。
 
-        优先通过 ChromaDB API 删除 collection，失败时回退到直接删除目录。
+        通过 ChromaDB 的 where 过滤按 doc_id 删除，保留其他文档的数据。
 
         Returns:
             是否成功删除。
         """
-        import chromadb
+        from .vector_store import VectorStoreManager
 
-        collection_name = self.collection_name(doc_id)
-        chroma_dir = str(self.chroma_dir(doc_id))
+        chroma_dir = str(self.chroma_dir())
+        if not Path(chroma_dir).exists():
+            return True  # 没有数据，视为已删除
 
-        deleted = False
         try:
-            client = chromadb.PersistentClient(path=chroma_dir)
-            client.delete_collection(collection_name)
-            deleted = True
-        except Exception:
-            dir_path = self.chroma_dir(doc_id)
-            if dir_path.exists():
-                shutil.rmtree(str(dir_path), ignore_errors=True)
-                deleted = True
-
-        return deleted
+            store = VectorStoreManager(
+                db_path=chroma_dir,
+                collection_name=self.collection_name(),
+            )
+            deleted = store.delete_by_doc_id(doc_id)
+            return deleted > 0
+        except Exception as e:
+            logger.warning("删除向量失败: %s", e)
+            return False
 
     def reindex(self, doc_id: int) -> None:
-        """重新索引：删除旧向量库 + 从已有分块重新入库。
+        """重新索引：从 KB 集合中删除旧数据 + 从已有分块重新入库。
 
         Raises:
             FileNotFoundError: 分块文件不存在。
-            Exception: 索引过程中的其他错误。
         """
         # 先删除旧向量
         self.delete_vectors(doc_id)
@@ -387,7 +393,7 @@ class DocumentProcessor:
         self.step3_chunks_to_db(doc_id)
 
     def search_in_doc(self, doc_id: int, query: str, top_k: int = 10) -> list[dict]:
-        """在单个文档的向量库中检索。
+        """在 KB 级别向量库中检索，限定单个文档。
 
         Args:
             doc_id: 文档 ID。
@@ -395,19 +401,19 @@ class DocumentProcessor:
             top_k: 返回结果数。
 
         Returns:
-            检索结果列表，每项包含 text, page, source, chunk_id, score。
+            检索结果列表，每项包含 text, page, source, chunk_id, score, doc_id。
         """
         from .vector_store import VectorStoreManager
 
-        chroma_dir = str(self.chroma_dir(doc_id))
+        chroma_dir = str(self.chroma_dir())
         if not Path(chroma_dir).exists():
             return []
 
         store = VectorStoreManager(
             db_path=chroma_dir,
-            collection_name=self.collection_name(doc_id),
+            collection_name=self.collection_name(),
         )
-        return store.search(query, top_k=top_k)
+        return store.search(query, top_k=top_k, where={"doc_id": doc_id})
 
     # ──────────────────────────────────────
     # 辅助方法

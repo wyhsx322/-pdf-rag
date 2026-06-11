@@ -5,6 +5,8 @@ import KnowledgeBaseDetail from './pages/KnowledgeBaseDetail'
 import SmartChunking from './pages/SmartChunking'
 import HybridSearch from './pages/HybridSearch'
 import ChatQA from './pages/ChatQA'
+import ThesisProject from './pages/ThesisProject'
+import ThesisWorkspace from './pages/ThesisWorkspace'
 import { ChatProvider } from './context/ChatContext'
 
 export default function App() {
@@ -18,6 +20,8 @@ export default function App() {
             <Route path="/chunking" element={<SmartChunking />} />
             <Route path="/search" element={<HybridSearch />} />
             <Route path="/chat" element={<ChatQA />} />
+            <Route path="/thesis" element={<ThesisProject />} />
+            <Route path="/thesis/:id" element={<ThesisWorkspace />} />
           </Routes>
         </Layout>
       </ChatProvider>

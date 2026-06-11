@@ -3,7 +3,6 @@
 支持跨文档检索测试，输入查询词查看召回片段及各项得分。
 """
 
-import concurrent.futures
 import sys
 from pathlib import Path
 
@@ -64,7 +63,7 @@ class SearchResponse(BaseModel):
 def hybrid_search(req: SearchRequest):
     """混合检索：向量语义 + BM25 关键词 + RRF 融合 + 可选 Reranker。
 
-    在知识库的所有已入库文档中执行检索，合并排序后返回 Top-K 结果。
+    在知识库的 KB 级别向量集合中检索，合并排序后返回 Top-K 结果。
     """
     import time
     start = time.time()
@@ -96,7 +95,19 @@ def hybrid_search(req: SearchRequest):
     if not docs:
         raise HTTPException(status_code=400, detail="该知识库下没有已入库的文档，请先上传并处理文档")
 
-    # ── 预计算查询处理（跨文档复用，仅一次 LLM 调用） ──────────
+    # ── KB 级别单一检索器 ────────────────────────────────────────
+    proc = DocumentProcessor(kb_name=kb_name, kb_id=req.kb_id)
+    chroma_dir = str(proc.chroma_dir())
+    if not Path(chroma_dir).exists():
+        return SearchResponse(
+            query=req.query,
+            total_results=0,
+            search_mode=_describe_mode(req),
+            results=[],
+            elapsed_seconds=0,
+        )
+
+    # ── 预计算查询处理（仅一次 LLM 调用） ──────────────────────────
     from test.query_processor import QueryProcessor
     query_variants = None
     keywords = None
@@ -119,41 +130,21 @@ def hybrid_search(req: SearchRequest):
         except Exception:
             pass
 
-    # ── 并行检索所有文档 ────────────────────────────────────────
-    proc = DocumentProcessor(kb_name=kb_name)
-
-    def _retrieve(doc):
-        chroma_path = str(proc.chroma_dir(doc["id"]))
-        collection_name = proc.collection_name(doc["id"])
-        if not proc.chroma_dir(doc["id"]).exists():
-            return []
-        retriever = HybridRetriever(
-            chroma_path=chroma_path,
-            collection_name=collection_name,
-        )
-        return retriever.search(
-            question=req.query,
-            top_k=req.top_k,
-            use_reranker=req.use_reranker,
-            use_rewrite=req.use_rewrite,
-            use_hyde=req.use_hyde,
-            query_variants=query_variants,
-            keywords=keywords,
-            hyde_doc=hyde_doc,
-        )
-
-    all_results = []
-    collections_searched = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(docs), 8)) as executor:
-        futures = {executor.submit(_retrieve, doc): doc for doc in docs}
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                doc_results = future.result()
-                if doc_results:
-                    all_results.extend(doc_results)
-                    collections_searched += 1
-            except Exception:
-                continue
+    # ── 单一 KB 级别检索 ──────────────────────────────────────────
+    retriever = HybridRetriever(
+        chroma_path=chroma_dir,
+        collection_name=proc.collection_name(),
+    )
+    all_results = retriever.search(
+        question=req.query,
+        top_k=req.top_k,
+        use_reranker=req.use_reranker,
+        use_rewrite=req.use_rewrite,
+        use_hyde=req.use_hyde,
+        query_variants=query_variants,
+        keywords=keywords,
+        hyde_doc=hyde_doc,
+    )
 
     if not all_results:
         return SearchResponse(
@@ -163,12 +154,6 @@ def hybrid_search(req: SearchRequest):
             results=[],
             elapsed_seconds=0,
         )
-
-    # 跨文档合并：按 rrf_score（或 rerank_score）重新排序
-    if req.use_reranker:
-        all_results.sort(key=lambda r: r.get("rerank_score", 0), reverse=True)
-    else:
-        all_results.sort(key=lambda r: r.get("rrf_score", 0), reverse=True)
 
     # 按 chunk_id 去重
     seen = set()
@@ -219,7 +204,7 @@ def hybrid_search(req: SearchRequest):
                 kb_id=req.kb_id,
                 kb_name=kb_name,
                 input_text=req.query,
-                output_text=str(req.top_k * 30),  # 改写输出估算
+                output_text=str(req.top_k * 30),
             )
         if req.use_reranker:
             record_usage(
@@ -229,7 +214,7 @@ def hybrid_search(req: SearchRequest):
                 input_text=req.query,
             )
     except Exception:
-        pass  # 用量记录失败不影响检索
+        pass
 
     return SearchResponse(
         query=req.query,

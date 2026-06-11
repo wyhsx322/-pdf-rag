@@ -37,7 +37,7 @@ def _get_processor_for_doc(doc: dict):
     """根据文档记录获取 DocumentProcessor 实例。"""
     from test.document_processor import DocumentProcessor
     kb_name = _get_kb_name(doc["kb_id"])
-    return DocumentProcessor(kb_name=kb_name)
+    return DocumentProcessor(kb_name=kb_name, kb_id=doc["kb_id"])
 
 
 def _make_safe_name(doc_id: int, original_name: str) -> str:
@@ -151,7 +151,8 @@ def delete_document(doc_id: int):
     # 删除产物目录
     shutil.rmtree(str(proc.md_dir(doc_id)), ignore_errors=True)
     shutil.rmtree(str(proc.chunks_dir(doc_id)), ignore_errors=True)
-    shutil.rmtree(str(proc.chroma_dir(doc_id)), ignore_errors=True)
+    # 从 KB 集合中删除该文档的向量
+    proc.delete_vectors(doc_id)
     # 兼容旧命名（不含 doc_ 前缀的目录）
     old_base = filename.replace(".pdf", "")
     for subdir in ["markd_demo", "split_demo", "chroma_demo"]:

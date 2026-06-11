@@ -213,8 +213,13 @@ def step3_chunks_to_db(
     collection_name: str,
     source: str,
     md_dir: pathlib.Path | None = None,
+    doc_id: int = 0,
 ):
-    """分块 → 向量编码 → ChromaDB。若 md_dir 中有 figure_summaries.json，一并入库。"""
+    """分块 → 向量编码 → ChromaDB。若 md_dir 中有 figure_summaries.json，一并入库。
+
+    Args:
+        doc_id: 文档 ID，写入每个 chunk 的 metadata 用于 KB 级别集合过滤。
+    """
     from .vector_store import VectorStoreManager
 
     logger.info("[3/3] 编码并存入向量数据库")
@@ -226,7 +231,7 @@ def step3_chunks_to_db(
         collection_name=collection_name,
     )
 
-    store.insert_chunks(chunks, source=source, replace=True)
+    store.insert_chunks(chunks, source=source, replace=True, doc_id=doc_id)
 
     # ── 图片摘要 chunks ──
     if md_dir:
@@ -252,14 +257,27 @@ def step3_chunks_to_db(
                         "summary_json": json.dumps(
                             fs.get("summary", {}), ensure_ascii=False
                         ),
+                        "doc_id": doc_id,
                     },
                 })
             if figure_chunks:
-                store.insert_chunks(figure_chunks, source=source, replace=False)
+                store.insert_chunks(figure_chunks, source=source, replace=False, doc_id=doc_id)
                 logger.info("  已插入 %d 个图片摘要分块", len(figure_chunks))
 
     stats = store.get_collection_stats()
     logger.info("  集合统计: %s", stats)
+
+
+def kb_chroma_dir(kb_id: int) -> pathlib.Path:
+    """KB 级别 ChromaDB 目录路径。"""
+    from .config import PROJECT_ROOT, OUTPUT_CHROMA_DIR, KB_CHROMA_DIR_PREFIX
+    return PROJECT_ROOT / OUTPUT_CHROMA_DIR / f"{KB_CHROMA_DIR_PREFIX}{kb_id}"
+
+
+def kb_collection_name(kb_id: int) -> str:
+    """KB 级别 ChromaDB 集合名称。"""
+    from .config import KB_COLLECTION_PREFIX, COLLECTION_NAME_SUFFIX
+    return f"{KB_COLLECTION_PREFIX}{kb_id}{COLLECTION_NAME_SUFFIX}"
 
 
 def main():

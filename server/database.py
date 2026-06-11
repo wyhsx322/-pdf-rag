@@ -89,6 +89,43 @@ def init_db():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS thesis_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            kb_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'active',
+            literature_notes TEXT NOT NULL DEFAULT '[]',
+            outline TEXT DEFAULT NULL,
+            outline_status TEXT NOT NULL DEFAULT 'none',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (kb_id) REFERENCES knowledge_bases(id) ON DELETE SET NULL
+        )
+    """)
+
+    # 迁移：为已存在的数据库添加 sections_content 列
+    try:
+        cursor.execute("ALTER TABLE thesis_projects ADD COLUMN sections_content TEXT NOT NULL DEFAULT '{}'")
+    except Exception:
+        pass  # 列已存在
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS agent_traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            agent_name TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            tool_name TEXT DEFAULT NULL,
+            latency_ms INTEGER DEFAULT NULL,
+            timestamp TEXT NOT NULL,
+            FOREIGN KEY (project_id) REFERENCES thesis_projects(id) ON DELETE CASCADE
+        )
+    """)
+
     conn.commit()
     conn.close()
 

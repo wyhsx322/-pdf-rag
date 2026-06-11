@@ -3,7 +3,6 @@
 严格依据上下文回答，自动引用来源（文件名 + 页码 + 高亮文本）。
 """
 
-import concurrent.futures
 import json
 import sys
 from pathlib import Path
@@ -41,24 +40,17 @@ class ChatRequest(BaseModel):
 
 # ── 系统提示词 ──
 
-CHAT_SYSTEM_PROMPT = """你是学术论文 RAG 问答助手。请严格遵守以下规则：
-
-1. 只基于给定的上下文回答，不得使用外部知识或训练数据中的记忆。
-2. 上下文信息不足以支撑判断时，明确说"根据现有资料无法确定"，不要猜测或编造。
-3. 每个关键结论需附来源标注，格式：[来源: chunk_id]。
-4. 不要把上下文中的相似但不同文献的内容当作同一事实；注意区分不同论文/章节的结论。
-5. 回答应条理清晰，使用中文，适当使用分点列举。
-6. 如果用户的问题与上下文完全无关，礼貌说明无法回答并引导用户提供更多信息。"""
+from test.prompt_library.v1.answer_generation import get_system as _get_answer_system
 
 
-def _build_chat_context(kb_id: int, question: str, top_k: int, use_reranker: bool, use_rewrite: bool) -> tuple[list[dict], list[str], list[dict]]:
-    """在知识库中检索相关上下文。
+def _build_chat_context(kb_id: int, question: str, top_k: int, use_reranker: bool, use_rewrite: bool) -> tuple[list[dict], list[str], list[dict], str, str]:
+    """在知识库的 KB 级别向量集合中检索相关上下文。
 
     Returns:
-        (contexts, source_lines, figures_info): 上下文列表、来源行列表、图片信息列表。
+        (contexts, source_lines, figures_info, intent, mode)
     """
     from test.hybrid_search import HybridRetriever
-    from test.query_processor import QueryProcessor
+    from test.query_processor import QueryProcessor, INTENT_MAX_CHUNKS, INTENT_MODE
 
     conn = get_connection()
     kb_row = conn.execute("SELECT * FROM knowledge_bases WHERE id = ?", (kb_id,)).fetchone()
@@ -72,56 +64,57 @@ def _build_chat_context(kb_id: int, question: str, top_k: int, use_reranker: boo
     ).fetchall()
     conn.close()
 
-    proc = DocumentProcessor(kb_name=kb_row["name"])
+    if not docs:
+        return [], [], [], "conceptual", "single"
 
-    # ── 预计算查询处理（跨文档复用，仅一次 LLM 调用） ──────────
+    proc = DocumentProcessor(kb_name=kb_row["name"], kb_id=kb_id)
+    chroma_dir = str(proc.chroma_dir())
+    if not Path(chroma_dir).exists():
+        return [], [], [], "conceptual", "single"
+
+    # ── 单次 LLM 调用：意图分类 + 改写 + 关键词（v2+shot） ──────────
+    intent = "conceptual"
     query_variants = None
     keywords = None
+    use_hyde = False
     if use_rewrite:
         try:
             qp = QueryProcessor()
-            variants = qp.rewrite_query(question, mode="multi_perspective")
-            query_variants = variants
-            keywords = qp.extract_keywords(question)
+            qu_result = qp.understand_query(question)
+            intent = qu_result.intent
+            query_variants = [question] + qu_result.rewrites
+            keywords = qu_result.keywords
+            use_hyde = qu_result.use_hyde
         except Exception:
             query_variants = [question]
             keywords = []
 
-    # ── 并行检索所有文档 ────────────────────────────────────────
-    def _retrieve(doc):
-        chroma_path = str(proc.chroma_dir(doc["id"]))
-        collection_name = proc.collection_name(doc["id"])
-        if not proc.chroma_dir(doc["id"]).exists():
-            return []
-        retriever = HybridRetriever(
-            chroma_path=chroma_path,
-            collection_name=collection_name,
-        )
-        return retriever.search(
-            question=question,
-            top_k=top_k,
-            use_reranker=use_reranker,
-            use_rewrite=use_rewrite,
-            query_variants=query_variants,
-            keywords=keywords,
-        )
+    mode = INTENT_MODE.get(intent, "multi")
+    max_chunks = INTENT_MAX_CHUNKS.get(intent, 8)
 
-    all_results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(docs), 8)) as executor:
-        futures = {executor.submit(_retrieve, doc): doc for doc in docs}
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                all_results.extend(future.result())
-            except Exception:
-                continue
+    # ── KB 级别检索 ───────────────────────────────────────────────
+    retriever = HybridRetriever(
+        chroma_path=chroma_dir,
+        collection_name=proc.collection_name(),
+    )
+    all_results = retriever.search(
+        question=question,
+        top_k=top_k,
+        use_reranker=use_reranker,
+        use_rewrite=use_rewrite,
+        query_variants=query_variants,
+        keywords=keywords,
+        hyde_doc=None,
+        use_hyde=use_hyde,
+    )
 
     if not all_results:
-        return [], []
+        return [], [], [], intent, mode
 
-    # 合并去重排序
+    # 去重排序
     sort_key = "rerank_score" if use_reranker else "rrf_score"
     all_results.sort(key=lambda r: r.get(sort_key, 0), reverse=True)
-    seen = set()
+    seen: set[str] = set()
     deduped = []
     for r in all_results:
         cid = r.get("chunk_id", "")
@@ -129,10 +122,10 @@ def _build_chat_context(kb_id: int, question: str, top_k: int, use_reranker: boo
             seen.add(cid)
             deduped.append(r)
 
-    # 截断上下文（最多 8 个块，总字符不超过 8000）
+    # 自适应截断：按意图决定最大 chunk 数，总字符不超过 8000
     selected = []
     total_chars = 0
-    for r in deduped[:8]:
+    for r in deduped[:max_chunks]:
         text = r.get("text", "")
         if total_chars + len(text) > 8000:
             remaining = 8000 - total_chars
@@ -144,29 +137,25 @@ def _build_chat_context(kb_id: int, question: str, top_k: int, use_reranker: boo
         selected.append(r)
         total_chars += len(text)
 
-    # 构建来源行
+    # 构建来源行（[^N] 格式，文件名 + 页码，去掉 chunk_id）
     source_lines = []
     figures_info = []
-    for ctx in selected:
-        chunk_id = ctx.get("chunk_id", "unknown")
+    for i, ctx in enumerate(selected, 1):
         source = ctx.get("source", "unknown")
         page = ctx.get("page", "?")
         snippet = ctx.get("text", "")[:120].replace("\n", " ")
-        source_lines.append(
-            f"📄 {source}.pdf | 📍 第{page}页 | 🏷️ {chunk_id}\n> {snippet}..."
-        )
-        # 收集图片信息
+        source_lines.append(f"[^{i}] {source}.pdf — 第{page}页\n> {snippet}...")
         if ctx.get("is_figure"):
             figures_info.append({
-                "chunk_id": chunk_id,
+                "chunk_id": ctx.get("chunk_id", ""),
                 "source": source,
                 "image_file": ctx.get("image_file", ""),
                 "caption": ctx.get("caption", ""),
-                "page": ctx.get("page"),
+                "page": page,
                 "figure_type": ctx.get("figure_type", ""),
             })
 
-    return selected, source_lines, figures_info
+    return selected, source_lines, figures_info, intent, mode
 
 
 @router.post("/chat")
@@ -181,7 +170,7 @@ async def chat(req: ChatRequest):
     """
     # 先检索上下文
     try:
-        contexts, source_lines, figures_info = _build_chat_context(
+        contexts, source_lines, figures_info, intent, mode = _build_chat_context(
             req.kb_id, req.question, req.top_k,
             req.use_reranker, req.use_rewrite,
         )
@@ -198,23 +187,28 @@ async def chat(req: ChatRequest):
             yield f"data: {done}\n\n"
         return StreamingResponse(no_results(), media_type="text/event-stream")
 
+    # 选择模式感知的系统提示词
+    system_prompt = _get_answer_system(mode)
+
     async def generate():
         import os
         from openai import OpenAI
         from test.config import RAG_LLM_API_KEY_ENV, RAG_LLM_BASE_URL, RAG_LLM_MODEL, RAG_LLM_TEMPERATURE, RAG_LLM_MAX_TOKENS, RAG_REQUEST_TIMEOUT
 
-        # 构建 prompt
+        # 构建 prompt：[N] 编号格式，让 LLM 用 [^N] 引用
         ctx_parts = []
         for i, ctx in enumerate(contexts, 1):
-            chunk_id = ctx.get("chunk_id", f"chunk_{i}")
+            source = ctx.get("source", "unknown")
+            page = ctx.get("page", "?")
             text = ctx.get("text", "")
+            source_label = f"{source}.pdf | 第{page}页"
             if ctx.get("is_figure"):
                 figure_type = ctx.get("figure_type", "")
                 caption = ctx.get("caption", "")
                 prefix = f"[图片摘要: {figure_type}]" + (f" {caption}" if caption else "")
-                ctx_parts.append(f"[{i}] [来源: {chunk_id}] {prefix}\n{text}")
+                ctx_parts.append(f"[{i}] {source_label} {prefix}\n{text}")
             else:
-                ctx_parts.append(f"[{i}] [来源: {chunk_id}]\n{text}")
+                ctx_parts.append(f"[{i}] {source_label}\n{text}")
 
         references = "\n\n".join(ctx_parts)
         user_prompt = (
@@ -225,7 +219,7 @@ async def chat(req: ChatRequest):
         api_key = os.environ.get(RAG_LLM_API_KEY_ENV, "")
         client = OpenAI(api_key=api_key, base_url=RAG_LLM_BASE_URL)
 
-        messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
+        messages = [{"role": "system", "content": system_prompt}]
 
         # 添加历史对话（最近 10 轮，避免上下文过长）
         for msg in req.history[-20:]:
@@ -255,7 +249,7 @@ async def chat(req: ChatRequest):
 
             # 发送来源引用
             if source_lines:
-                yield f"data: {json.dumps({'type': 'text', 'content': '\n\n---\n### 📚 参考来源\n\n'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'text', 'content': '\n\n---\n### 参考来源\n\n'}, ensure_ascii=False)}\n\n"
                 for line in source_lines:
                     msg = json.dumps({"type": "source", "content": line}, ensure_ascii=False)
                     yield f"data: {msg}\n\n"

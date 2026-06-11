@@ -15,6 +15,9 @@ output/
 data/
 *.db
 
+# 上传的 PDF 原文件（体积大、含用户数据）
+primary_datas/
+
 # 前端
 node_modules/
 frontend/dist/
@@ -22,3 +25,6 @@ frontend/dist/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 误存的 HTML 文件
+install.cmd

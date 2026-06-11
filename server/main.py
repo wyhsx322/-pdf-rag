@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from server.routers import kb, documents, chunking, search, chat, usage, conversations
+from server.routers import agent as agent_router
 
 app = FastAPI(
     title="论文 RAG 系统 API",
@@ -41,6 +42,7 @@ app.include_router(search.router, prefix="/api", tags=["检索"])
 app.include_router(chat.router, prefix="/api", tags=["问答"])
 app.include_router(usage.router, prefix="/api", tags=["用量"])
 app.include_router(conversations.router, prefix="/api", tags=["对话"])
+app.include_router(agent_router.router, prefix="/api/agent", tags=["多智能体"])
 
 # ── 图片静态文件服务 ──
 

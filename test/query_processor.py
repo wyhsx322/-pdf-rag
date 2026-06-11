@@ -3,12 +3,16 @@
 
 使用 DashScope qwen-turbo 模型（速度快、成本低，适合改写任务），
 通过 OpenAI 兼容接口调用。
+
+v2 新增 understand_query()：单次 LLM 调用同时完成意图分类 + 改写 + 关键词提取，
+使用 prompt_library v2+shot 版本。旧方法保留供向后兼容。
 """
 
 import json
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -26,6 +30,32 @@ from .config import (
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class QueryResult:
+    """understand_query() 的结构化输出。"""
+    intent: str                       # factual / conceptual / analytical / comparative
+    rewrites: list[str] = field(default_factory=list)   # 查询变体（不含原始）
+    keywords: list[str] = field(default_factory=list)   # 核心检索关键词
+    use_hyde: bool = False
+
+
+# 意图 → 推荐最大 chunk 数
+INTENT_MAX_CHUNKS: dict[str, int] = {
+    "factual":     4,
+    "conceptual":  5,
+    "analytical":  8,
+    "comparative": 8,
+}
+
+# 意图 → 检索模式（影响来源多样性策略）
+INTENT_MODE: dict[str, str] = {
+    "factual":     "single",
+    "conceptual":  "single",
+    "analytical":  "multi",
+    "comparative": "multi",
+}
 
 _KEYWORD_EXTRACT_PROMPT = """你是一个学术信息检索专家。从用户查询中提取 3-5 个核心检索关键词，用逗号分隔。
 只输出关键词，不要解释或其他内容。
@@ -145,6 +175,83 @@ class QueryProcessor:
 
         else:
             raise ValueError(f"未知改写模式: {mode}，可选: keyword_extract, multi_perspective")
+
+    def understand_query(self, query: str) -> QueryResult:
+        """单次 LLM 调用：意图分类 + 改写 + 关键词提取（v2+shot）。
+
+        相比分别调用 rewrite_query + extract_keywords 节省一次 API 调用，
+        且输出更一致（JSON 结构化）。
+
+        Returns:
+            QueryResult，含 intent / rewrites / keywords / use_hyde。
+            失败时返回安全默认值（conceptual 意图，空改写和关键词）。
+        """
+        from .prompt_library.v2.query_understanding import build_system_with_examples, USER_TEMPLATE, METADATA
+
+        system = build_system_with_examples()
+        user_msg = USER_TEMPLATE.format(query=query)
+
+        try:
+            raw = self._call_llm_with_tokens(
+                system_prompt=system,
+                user_message=user_msg,
+                max_tokens=METADATA.get("max_tokens", 700),
+                temperature=METADATA.get("temperature", 0.2),
+            )
+            # 清理可能的 markdown 代码块包装
+            stripped = raw.strip()
+            if stripped.startswith("```"):
+                lines = stripped.split("\n")
+                stripped = "\n".join(
+                    lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+                )
+            data = json.loads(stripped)
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning("understand_query 解析失败，使用默认值: %s", e)
+            return QueryResult(intent="conceptual")
+
+        result = QueryResult(
+            intent=data.get("intent", "conceptual"),
+            rewrites=data.get("rewrites", []),
+            keywords=data.get("keywords", []),
+            use_hyde=bool(data.get("use_hyde", False)),
+        )
+        logger.info(
+            "understand_query: intent=%s rewrites=%d keywords=%d hyde=%s",
+            result.intent, len(result.rewrites), len(result.keywords), result.use_hyde,
+        )
+        return result
+
+    def _call_llm_with_tokens(
+        self,
+        system_prompt: str,
+        user_message: str,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        """调用 LLM，支持自定义 max_tokens 和 temperature，失败时自动重试。"""
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self._model,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                )
+                return resp.choices[0].message.content.strip()
+            except Exception as e:
+                if attempt < MAX_RETRIES - 1:
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "LLM 调用失败（第 %d/%d 次），%d 秒后重试: %s",
+                        attempt + 1, MAX_RETRIES, wait, e,
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
 
     def generate_hyde_document(self, query: str) -> Optional[str]:
         """生成 HyDE 假设文档段落。

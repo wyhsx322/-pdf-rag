@@ -111,6 +111,7 @@ class VectorStoreManager:
         chunks: list[dict],
         source: str,
         replace: bool = False,
+        doc_id: int = 0,
     ) -> int:
         """将分块文本编码为向量并写入数据库。
 
@@ -118,6 +119,7 @@ class VectorStoreManager:
             chunks: 分块字典列表，每个字典包含 ``text``、``page``、``metadata`` 键。
             source: 来源标识，写入 metadata。
             replace: 为 True 时先按 source 删除旧数据再插入。
+            doc_id: 文档 ID，写入 metadata 用于 KB 级别集合中按文档过滤。
 
         Returns:
             插入的行数。
@@ -149,6 +151,7 @@ class VectorStoreManager:
             meta["page"] = int(chunk["page"])
             meta["source"] = source
             meta["chunk_id"] = cid
+            meta["doc_id"] = doc_id
             metadatas.append(meta)
 
         self._collection.add(
@@ -160,12 +163,19 @@ class VectorStoreManager:
         logger.info("已向 '%s' 插入 %d 行", self.collection_name, total)
         return total
 
-    def search(self, query: str, top_k: int = 5) -> list[dict]:
+    def search(
+        self, query: str, top_k: int = 5, where: dict | None = None,
+    ) -> list[dict]:
         """返回与查询文本最相似的前 *top_k* 个分块。
+
+        Args:
+            query: 查询文本。
+            top_k: 返回结果数。
+            where: ChromaDB where 过滤条件，用于按 doc_id 等字段过滤。
 
         Returns:
             字典列表，每个字典包含 ``text``、``page``、``source``、
-            ``chunk_id`` 和 ``score`` 键。
+            ``chunk_id``、``doc_id`` 和 ``score`` 键。
         """
         if self._collection.count() == 0:
             logger.warning(
@@ -175,11 +185,15 @@ class VectorStoreManager:
 
         query_emb = self._encode_batch([query])[0]
 
-        results = self._collection.query(
-            query_embeddings=[query_emb],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
-        )
+        kwargs = {
+            "query_embeddings": [query_emb],
+            "n_results": top_k,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where:
+            kwargs["where"] = where
+
+        results = self._collection.query(**kwargs)
 
         formatted = []
         ids_list = results.get("ids", [[]])[0]
@@ -194,6 +208,7 @@ class VectorStoreManager:
                 "page": meta.get("page"),
                 "source": meta.get("source", ""),
                 "chunk_id": meta.get("chunk_id", ""),
+                "doc_id": meta.get("doc_id", 0),
                 "score": dists_list[i] if i < len(dists_list) else 0.0,
             })
         return formatted
@@ -218,6 +233,24 @@ class VectorStoreManager:
         after = self._collection.count()
         deleted = before - after
         logger.info("已删除 source='%s' 的 %d 行", source, deleted)
+        return deleted
+
+    def delete_by_doc_id(self, doc_id: int) -> int:
+        """按 doc_id 字段删除所有匹配行（KB 级别集合中使用）。
+
+        Returns:
+            删除的行数。
+        """
+        before = self._collection.count()
+        try:
+            self._collection.delete(where={"doc_id": doc_id})
+        except Exception as e:
+            logger.error("按 doc_id '%d' 删除失败: %s", doc_id, e)
+            return 0
+
+        after = self._collection.count()
+        deleted = before - after
+        logger.info("已删除 doc_id=%d 的 %d 行", doc_id, deleted)
         return deleted
 
 

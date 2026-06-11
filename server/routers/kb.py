@@ -97,7 +97,7 @@ def delete_kb(kb_id: int):
 
     # 删除文件系统上的文档和产物
     kb_name = kb_row["name"]
-    proc = DocumentProcessor(kb_name=kb_name)
+    proc = DocumentProcessor(kb_name=kb_name, kb_id=kb_id)
     for doc in docs:
         # 删除上传的 PDF（同时清理 kb 目录）
         pdf_path = proc.pdf_path(doc)
@@ -105,6 +105,8 @@ def delete_kb(kb_id: int):
         # 删除产物目录
         shutil.rmtree(str(proc.md_dir(doc["id"])), ignore_errors=True)
         shutil.rmtree(str(proc.chunks_dir(doc["id"])), ignore_errors=True)
-        shutil.rmtree(str(proc.chroma_dir(doc["id"])), ignore_errors=True)
+
+    # 删除 KB 级别 ChromaDB 目录
+    shutil.rmtree(str(proc.chroma_dir()), ignore_errors=True)
 
     return MessageResponse(message=f"知识库 '{kb_row['name']}' 及其 {len(docs)} 个文档已删除")

@@ -119,7 +119,7 @@ def _get_processor_for_doc(doc: dict) -> DocumentProcessor:
     conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="知识库不存在")
-    return DocumentProcessor(kb_name=row["name"])
+    return DocumentProcessor(kb_name=row["name"], kb_id=doc["kb_id"])
 
 
 # ── 路由 ──
@@ -315,7 +315,7 @@ async def batch_process(kb_id: int, req: BatchProcessRequest):
             docs.append(dict(doc))
     conn.close()
 
-    proc = DocumentProcessor(kb_name=kb_name)
+    proc = DocumentProcessor(kb_name=kb_name, kb_id=kb_id)
 
     async def generate():
         for event in proc.process_batch(docs):

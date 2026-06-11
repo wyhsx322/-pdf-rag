@@ -32,17 +32,14 @@ from .config import (
     OUTPUT_CHROMA_DIR,
     COLLECTION_NAME_SUFFIX,
 )
+from .prompt_templates import (
+    get_system_prompt,
+    inject_few_shot_examples,
+)
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-SYSTEM_PROMPT = """你是学术论文 RAG 问答助手。请遵守以下规则：
-
-1. 只基于给定的上下文回答，不得使用外部知识。
-2. 上下文信息不足以支撑判断时，明确说"根据现有资料无法确定"，不要猜测。
-3. 每个关键结论需附来源标注，格式：[来源: chunk_id]。
-4. 不要把上下文中的相似但不同文献的内容当作同一事实；注意区分不同论文/章节的结论。"""
 
 
 class RAGGenerator:
@@ -84,6 +81,7 @@ class RAGGenerator:
         use_reranker: bool = False,
         use_rewrite: bool = True,
         stream: bool = True,
+        reasoning_mode: bool = False,
     ) -> str:
         """检索 + 生成答案，末尾拼接来源引用段。
 
@@ -93,6 +91,7 @@ class RAGGenerator:
             use_reranker: 是否使用 BGE-Reranker 重排序。
             use_rewrite: 是否使用查询改写。
             stream: 是否流式输出 LLM 答案。
+            reasoning_mode: 是否启用多步推理模式（用于复杂问题）。
 
         Returns:
             完整文本（LLM 答案 + 来源引用段）。
@@ -112,7 +111,9 @@ class RAGGenerator:
             return msg
 
         contexts = self._dedup_and_truncate(all_results)
-        system_prompt, user_prompt = self._build_prompt(question, contexts)
+        system_prompt, user_prompt = self._build_prompt(
+            question, contexts, reasoning_mode=reasoning_mode
+        )
 
         answer_text = self._call_llm(system_prompt, user_prompt, stream)
 
@@ -159,9 +160,14 @@ class RAGGenerator:
         return selected
 
     def _build_prompt(
-        self, question: str, contexts: list[dict]
+        self, question: str, contexts: list[dict], reasoning_mode: bool = False,
     ) -> tuple[str, str]:
-        """组装 system_prompt 和 user_prompt。
+        """组装 system_prompt 和 user_prompt（含 few-shot 示例）。
+
+        Args:
+            question: 用户问题。
+            contexts: 上下文列表。
+            reasoning_mode: 是否启用多步推理。
 
         Returns:
             (system_prompt, user_prompt) 元组。
@@ -182,7 +188,11 @@ class RAGGenerator:
             f"## 回答\n"
         )
 
-        return SYSTEM_PROMPT, user_prompt
+        # 注入 few-shot 示例
+        user_prompt = inject_few_shot_examples(user_prompt)
+
+        system_prompt = get_system_prompt(reasoning_mode=reasoning_mode)
+        return system_prompt, user_prompt
 
     def _call_llm(
         self, system_prompt: str, user_prompt: str, stream: bool

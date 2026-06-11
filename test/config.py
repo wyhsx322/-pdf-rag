@@ -100,6 +100,10 @@ OUTPUT_CHROMA_DIR = "output/chroma_demo"
 
 COLLECTION_NAME_SUFFIX = "_papers"  # 集合名: <name>_papers
 
+# KB 级别集合配置（单集合架构）
+KB_CHROMA_DIR_PREFIX = "kb_"      # ChromaDB 目录前缀: kb_{kb_id}
+KB_COLLECTION_PREFIX = "kb_"      # 集合名前缀: kb_{kb_id}_papers
+
 HASH_REGISTRY_FILE = "output/file_hash_registry.json"  # 文件哈希注册表
 HASH_ALGORITHM = "sha256"  # 哈希算法
 

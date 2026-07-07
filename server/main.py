@@ -8,6 +8,7 @@ import re
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -15,9 +16,12 @@ from fastapi.responses import FileResponse
 # 将项目根目录加入 sys.path，以便导入 test 模块
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-from server.routers import kb, documents, chunking, search, chat, usage, conversations
+from server.routers import kb, documents, chunking, search, chat, usage, conversations, settings
 from server.routers import agent as agent_router
+
+settings.apply_runtime_config()
 
 app = FastAPI(
     title="论文 RAG 系统 API",
@@ -42,6 +46,7 @@ app.include_router(search.router, prefix="/api", tags=["检索"])
 app.include_router(chat.router, prefix="/api", tags=["问答"])
 app.include_router(usage.router, prefix="/api", tags=["用量"])
 app.include_router(conversations.router, prefix="/api", tags=["对话"])
+app.include_router(settings.router, prefix="/api", tags=["配置"])
 app.include_router(agent_router.router, prefix="/api/agent", tags=["多智能体"])
 
 # ── 图片静态文件服务 ──

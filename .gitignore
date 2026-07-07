@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+server/runtime_config.json
 output/
 *.ipynb_checkpoints/
 
@@ -21,6 +22,10 @@ primary_datas/
 # 前端
 node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Logs
+*.log
 
 # 系统文件
 .DS_Store

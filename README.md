@@ -97,7 +97,7 @@ DASHSCOPE_API_KEY=sk-xxxxxxxx
 DEEPSEEK_API_KEY=sk-xxxxxxxx
 ```
 
-也可以启动后进入前端「设置」页面配置 API Key 和模型。前端保存的运行时配置会写入 `server/runtime_config.json`，该文件可能包含明文密钥，只应保留在本地，不要提交到 GitHub。
+也可以启动后进入前端「设置」页面配置 API Key 和模型。API Key 会写入本地 `.env`；模型名和 base URL 会写入 `server/runtime_config.json`。这两个文件都属于本地配置，不要提交到 GitHub。
 
 ## 启动
 

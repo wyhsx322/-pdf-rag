@@ -136,3 +136,41 @@ EVAL_METRIC_KEYS = [
 # ---------------------------------------------------------------------------
 
 DEVICE = "cuda"
+
+# ---------------------------------------------------------------------------
+# 运行时配置覆盖（来自 server/runtime_config.json，由前端「模型配置」页写入）
+# 优先级：runtime_config.json > 环境变量 > 上方默认值。导入时一次性应用。
+# ---------------------------------------------------------------------------
+
+
+def _apply_runtime_overrides() -> None:
+    import json
+
+    store_path = PROJECT_ROOT / "server" / "runtime_config.json"
+    if not store_path.exists():
+        return
+    try:
+        store = json.loads(store_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    g = globals()
+
+    # Runtime JSON stores model overrides only; API keys live in .env.
+    models = store.get("models") or {}
+
+    def _set(role: str, model_key: str | None, url_key: str | None):
+        m = models.get(role) or {}
+        if model_key and m.get("model"):
+            g[model_key] = m["model"]
+        if url_key and m.get("base_url"):
+            g[url_key] = m["base_url"]
+
+    _set("generation", "RAG_LLM_MODEL", "RAG_LLM_BASE_URL")
+    _set("embedding", "EMBEDDING_MODEL", "DASHSCOPE_BASE_URL")
+    _set("query_llm", "QUERY_LLM_MODEL", None)
+    _set("vl", "VL_MODEL", "VL_BASE_URL")
+    _set("reranker", "RERANKER_MODEL", None)
+
+
+_apply_runtime_overrides()

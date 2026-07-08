@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import * as Dropdown from '@radix-ui/react-dropdown-menu'
+import { FileText, Loader2, Play, Database, Trash2 } from 'lucide-react'
 import type { Document } from '../types'
-import { DOC_STATUS_LABELS, DOC_STATUS_COLORS } from '../types'
+import { DOC_STATUS_LABELS } from '../types'
+import Badge from './ui/Badge'
 
-interface DocumentRowProps {
+interface Props {
   doc: Document
   onDelete: (id: number) => void
   onProcess: (id: number) => void
@@ -12,115 +14,70 @@ interface DocumentRowProps {
   processing: boolean
 }
 
-function formatFileSize(bytes: number): string {
+const statusTone: Record<string, 'slate' | 'blue' | 'amber' | 'emerald' | 'rose'> = {
+  uploaded: 'slate', parsed: 'blue', chunked: 'amber', indexed: 'emerald', error: 'rose',
+}
+
+function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export default function DocumentRow({ doc, onDelete, onProcess, onViewVectorStats, onDeleteVectors, onReindex, processing }: DocumentRowProps) {
+const menuItem = 'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-slate-600 outline-none data-[highlighted]:bg-slate-100'
+
+export default function DocumentRow({ doc, onDelete, onProcess, onViewVectorStats, onDeleteVectors, onReindex, processing }: Props) {
   const isProcessing = processing || doc.status === 'parsed'
-  const [showVectorMenu, setShowVectorMenu] = useState(false)
 
   return (
-    <tr className="border-b border-gray-100 hover:bg-gray-50/50 transition-colors">
-      <td className="py-3 px-4">
+    <tr className="border-b border-slate-50 transition-colors last:border-0 hover:bg-slate-50/60">
+      <td className="px-4 py-3">
         <div className="flex items-center gap-3">
-          <span className="text-red-500 shrink-0">
-            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" />
-            </svg>
-          </span>
-          <div>
-            <p className={`text-sm font-medium truncate max-w-[250px] ${doc.status === 'indexed' ? 'text-emerald-600' : 'text-gray-900'}`} title={doc.original_name}>
-              {doc.original_name}
-            </p>
-            <p className="text-xs text-gray-400">{formatFileSize(doc.file_size)}</p>
+          <FileText className="h-4 w-4 shrink-0 text-rose-400" />
+          <div className="min-w-0">
+            <p className="max-w-[260px] truncate text-sm font-medium text-slate-700" title={doc.original_name}>{doc.original_name}</p>
+            <p className="text-xs text-slate-400">{fmtSize(doc.file_size)}</p>
           </div>
         </div>
       </td>
-      <td className="py-3 px-4">
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${DOC_STATUS_COLORS[doc.status]}`}>
-          {DOC_STATUS_LABELS[doc.status]}
-        </span>
-      </td>
-      <td className="py-3 px-4 text-sm text-gray-500 text-center">
-        {doc.page_count ? `${doc.page_count} 页` : '-'}
-      </td>
-      <td className="py-3 px-4 text-sm text-gray-400">
-        {new Date(doc.created_at).toLocaleString('zh-CN')}
-      </td>
-      <td className="py-3 px-4">
-        <div className="flex items-center gap-1.5">
-          {/* 处理按钮 */}
+      <td className="px-4 py-3"><Badge tone={statusTone[doc.status]}>{DOC_STATUS_LABELS[doc.status]}</Badge></td>
+      <td className="px-4 py-3 text-center text-sm text-slate-500">{doc.page_count ? `${doc.page_count} 页` : '—'}</td>
+      <td className="px-4 py-3 text-xs text-slate-400">{new Date(doc.created_at).toLocaleString('zh-CN')}</td>
+      <td className="px-4 py-3">
+        <div className="flex items-center justify-end gap-1">
           {doc.status !== 'indexed' && (
             <button
               onClick={() => onProcess(doc.id)}
               disabled={isProcessing}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium text-indigo-600
-                hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="执行解析→切片→入库流水线"
+              className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-50 disabled:opacity-50"
+              title="解析→切片→入库流水线"
             >
-              {isProcessing ? '处理中…' : '处理'}
+              {isProcessing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+              {isProcessing ? '处理中' : '处理'}
             </button>
           )}
 
-          {/* 向量库操作下拉菜单 */}
           {(doc.status === 'indexed' || doc.status === 'chunked') && (
-            <div className="relative">
-              <button
-                onClick={() => setShowVectorMenu(!showVectorMenu)}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500
-                  hover:bg-slate-100 transition-colors"
-                title="向量库操作"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-                </svg>
-              </button>
-              {showVectorMenu && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setShowVectorMenu(false)} />
-                  <div className="absolute right-0 top-full mt-1 z-20 w-36 bg-white rounded-lg shadow-lg border border-gray-200 py-1">
-                    <button
-                      onClick={() => { onViewVectorStats(doc.id); setShowVectorMenu(false) }}
-                      className="w-full text-left px-3 py-2 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
-                    >
-                      查看向量统计
-                    </button>
-                    {doc.status === 'indexed' && (
-                      <button
-                        onClick={() => { onDeleteVectors(doc.id); setShowVectorMenu(false) }}
-                        className="w-full text-left px-3 py-2 text-xs text-amber-600 hover:bg-amber-50 transition-colors"
-                      >
-                        删除向量数据
-                      </button>
-                    )}
-                    {doc.status === 'chunked' && (
-                      <button
-                        onClick={() => { onReindex(doc.id); setShowVectorMenu(false) }}
-                        className="w-full text-left px-3 py-2 text-xs text-indigo-600 hover:bg-indigo-50 transition-colors"
-                      >
-                        重新索引
-                      </button>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
+            <Dropdown.Root>
+              <Dropdown.Trigger className="rounded-lg p-1.5 text-slate-400 outline-none transition-colors hover:bg-slate-100 hover:text-slate-600" title="向量库操作">
+                <Database className="h-4 w-4" />
+              </Dropdown.Trigger>
+              <Dropdown.Portal>
+                <Dropdown.Content align="end" sideOffset={4} className="z-50 w-40 rounded-xl border border-slate-200 bg-white p-1.5 shadow-float">
+                  <Dropdown.Item className={menuItem} onSelect={() => onViewVectorStats(doc.id)}>查看向量统计</Dropdown.Item>
+                  {doc.status === 'indexed' && (
+                    <Dropdown.Item className={menuItem} onSelect={() => onDeleteVectors(doc.id)}>删除向量数据</Dropdown.Item>
+                  )}
+                  {doc.status === 'chunked' && (
+                    <Dropdown.Item className={menuItem} onSelect={() => onReindex(doc.id)}>重新索引</Dropdown.Item>
+                  )}
+                </Dropdown.Content>
+              </Dropdown.Portal>
+            </Dropdown.Root>
           )}
 
-          {/* 删除按钮 */}
-          <button
-            onClick={() => onDelete(doc.id)}
-            className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-            title="删除文档"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-            </svg>
+          <button onClick={() => onDelete(doc.id)} className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-500" title="删除文档">
+            <Trash2 className="h-4 w-4" />
           </button>
         </div>
       </td>

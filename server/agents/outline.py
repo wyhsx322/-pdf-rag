@@ -16,34 +16,15 @@ from openai import OpenAI
 
 from test.config import RAG_LLM_API_KEY_ENV, RAG_LLM_BASE_URL, RAG_LLM_MODEL
 from .base import AgentBase, sse
-
-_SYSTEM = """\
-你是一个学术论文大纲规划专家。根据研究主题和文献素材，生成完整的论文大纲。
-
-输出严格的 JSON，包含以下字段（不加任何解释或 markdown）：
-{
-  "title": "论文标题（学术规范，不超过25字）",
-  "abstract_hint": "摘要要点（1-2句话，说明研究问题和主要方法）",
-  "research_gap": "研究空白/创新点（1-2句话）",
-  "sections": [
-    {
-      "id": "1",
-      "title": "章节标题",
-      "key_points": ["要点1", "要点2", "要点3"],
-      "estimated_words": 1000
-    }
-  ]
-}
-
-章节要求：必须包含研究背景、文献综述、研究方法、结果与分析、结论与展望。
-每章 3-5 个关键要点，预估总字数 15000-25000 字。"""
+from .prompts import OUTLINE_SYSTEM
 
 
 class OutlineAgent(AgentBase):
     name = "大纲规划"
 
-    def __init__(self, project_id: int, session_id: str):
+    def __init__(self, project_id: int, session_id: str, methodology: str = ""):
         super().__init__(project_id, session_id)
+        self.methodology = methodology or "相关研究"
         api_key = os.environ.get(RAG_LLM_API_KEY_ENV, "")
         self._client = OpenAI(api_key=api_key, base_url=RAG_LLM_BASE_URL)
 
@@ -60,7 +41,7 @@ class OutlineAgent(AgentBase):
             temperature=0.3,
             max_tokens=2000,
             messages=[
-                {"role": "system", "content": _SYSTEM},
+                {"role": "system", "content": OUTLINE_SYSTEM.format(methodology=self.methodology)},
                 {"role": "user", "content": user_msg},
             ],
         )

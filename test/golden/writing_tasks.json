@@ -1,0 +1,43 @@
+{
+  "description": "论文写作任务黄金集——用于轨迹评估（trajectory eval）。每条任务驱动一次端到端章节写作，评估工具调用、延迟、代币成本、引用准确率。绑定知识库 kb_id=2（论文11，主题：情绪传播/计算传播/网络舆论）。",
+  "kb_id": 2,
+  "sim_threshold": 0.55,
+  "tasks": [
+    {
+      "id": "W1",
+      "topic": "社交媒体中的情绪传播与回音室效应",
+      "section_title": "文献综述",
+      "key_points": [
+        "情绪传播的社会计算模型与传播机制",
+        "网络舆论同音（回音室）效应的形成与实证",
+        "已有研究的方法局限与研究空白"
+      ],
+      "must_cite_sources": [],
+      "min_citation_accuracy": 0.6
+    },
+    {
+      "id": "W2",
+      "topic": "计算传播学视角下的舆情情感分析方法",
+      "section_title": "研究方法",
+      "key_points": [
+        "细粒度情感分析的标注与建模流程",
+        "fsQCA 等组态方法在传播研究中的应用",
+        "数据来源、样本与信效度说明"
+      ],
+      "must_cite_sources": [],
+      "min_citation_accuracy": 0.6
+    },
+    {
+      "id": "W3",
+      "topic": "危机事件中公众的风险感知与愤怒情绪表达",
+      "section_title": "引言",
+      "key_points": [
+        "极端事件中公众风险感知的研究背景",
+        "从愤怒到厌恶的情绪演化逻辑",
+        "本研究的问题意识与创新点"
+      ],
+      "must_cite_sources": [],
+      "min_citation_accuracy": 0.6
+    }
+  ]
+}

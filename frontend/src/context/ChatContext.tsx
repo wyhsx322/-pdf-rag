@@ -1,6 +1,14 @@
 import { createContext, useContext, useState, useCallback, type ReactNode, type Dispatch, type SetStateAction } from 'react'
 import type { Conversation } from '../types'
-import { listConversations, getConversation, deleteConversation as deleteConvApi, createConversation, appendMessages } from '../api/client'
+import {
+  listConversations,
+  getConversation,
+  deleteConversation as deleteConvApi,
+  createConversation,
+  appendMessages,
+  type LongTermMemoryCandidate,
+  type LongTermMemoryUsed,
+} from '../api/client'
 
 // ── 展示用消息类型 ──
 
@@ -16,6 +24,8 @@ export interface DisplayMessage {
     page: number | null
     figure_type: string
   }>
+  memoryCandidate?: LongTermMemoryCandidate | null
+  memoryUsed?: LongTermMemoryUsed[]
   isStreaming: boolean
 }
 
@@ -67,6 +77,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         content: m.content,
         sources: JSON.parse(m.sources || '[]'),
         figures: [],
+        memoryCandidate: null,
+        memoryUsed: [],
         isStreaming: false,
       }))
       setMessages(msgs)

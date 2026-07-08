@@ -111,6 +111,16 @@ def init_db():
     except Exception:
         pass  # 列已存在
 
+    # 迁移：多知识库（JSON 数组）+ 研究方法/专家角色（创建必填）
+    try:
+        cursor.execute("ALTER TABLE thesis_projects ADD COLUMN kb_ids TEXT NOT NULL DEFAULT '[]'")
+    except Exception:
+        pass  # 列已存在
+    try:
+        cursor.execute("ALTER TABLE thesis_projects ADD COLUMN methodology TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass  # 列已存在
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS agent_traces (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,6 +133,60 @@ def init_db():
             latency_ms INTEGER DEFAULT NULL,
             timestamp TEXT NOT NULL,
             FOREIGN KEY (project_id) REFERENCES thesis_projects(id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS long_term_memory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kb_id INTEGER,
+            project_id INTEGER,
+            scope TEXT NOT NULL DEFAULT 'kb',
+            category TEXT NOT NULL DEFAULT 'preference',
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            source TEXT NOT NULL DEFAULT 'chat',
+            metadata TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (kb_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+            FOREIGN KEY (project_id) REFERENCES thesis_projects(id) ON DELETE CASCADE
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS long_term_memory_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kb_id INTEGER,
+            project_id INTEGER,
+            conversation_id INTEGER,
+            category TEXT NOT NULL DEFAULT 'preference',
+            content TEXT NOT NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            source_user_message TEXT NOT NULL DEFAULT '',
+            source_assistant_message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (kb_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+            FOREIGN KEY (project_id) REFERENCES thesis_projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS long_term_memory_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kb_id INTEGER,
+            project_id INTEGER,
+            conversation_id INTEGER,
+            question TEXT NOT NULL DEFAULT '',
+            memory_ids TEXT NOT NULL DEFAULT '[]',
+            memories TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (kb_id) REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+            FOREIGN KEY (project_id) REFERENCES thesis_projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
         )
     """)
 

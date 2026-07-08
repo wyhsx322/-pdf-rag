@@ -14,6 +14,7 @@ from openai import OpenAI
 
 from test.config import RAG_LLM_API_KEY_ENV, RAG_LLM_BASE_URL, RAG_LLM_MODEL
 from .base import AgentBase, sse
+from .prompts import WRITING_SYSTEM, WRITING_USER
 
 # ── Tool 定义 ──────────────────────────────────────────────────────────────
 
@@ -63,6 +64,26 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_written_sections",
+            "description": (
+                "读取本论文【已生成的其他章节】的摘要（已敲定章节为分级小节摘要，"
+                "未敲定的回退为大纲要点）。撰写前调用，以保持与前文论证连贯、避免重复、必要时呼应。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "可选：聚焦想了解的前文主题；留空则返回全部已生成章节摘要",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_section_draft",
             "description": (
                 "提交完成的章节草稿并保存。调用此工具表示写作结束。"
@@ -91,33 +112,32 @@ _TOOLS = [
     },
 ]
 
-_SYSTEM = """\
-你是一个专业的学术论文写作助手，正在协助撰写论文章节。
-
-请严格按 ReAct 步骤工作：
-1. 思考：分析章节主题和关键要点，确定需要哪些文献支撑
-2. 行动：优先调用 search_project_memory 检索本项目历史论点（本项目已积累的研究成果）
-3. 行动：再调用 search_knowledge_base 补充搜索新的文献段落（1-2 次）
-4. 观察：综合两个来源的证据，提取有用的论点
-5. 行动：调用 write_section_draft 提交完整的章节草稿（必须调用此工具结束写作）
-
-写作要求：
-- 学术规范，语言严谨
-- 基于文献证据，在引用处用 [来源: 文件名 第N页] 标注
-- 逻辑清晰，论点有据可查
-- 字数在 1000-2000 字之间"""
-
-
 class SectionWritingAgent(AgentBase):
     name = "章节写作"
 
-    def __init__(self, project_id: int, session_id: str, kb_id: int, section_id: str):
+    def __init__(
+        self,
+        project_id: int,
+        session_id: str,
+        kb_ids,
+        section_id: str,
+        methodology: str = "",
+    ):
         super().__init__(project_id, session_id)
-        self.kb_id = kb_id
+        # 兼容旧调用：kb_ids 可能传单个 int，统一规整为去空的 list
+        if isinstance(kb_ids, (list, tuple)):
+            self.kb_ids = [k for k in kb_ids if k]
+        elif kb_ids:
+            self.kb_ids = [kb_ids]
+        else:
+            self.kb_ids = []
+        self.methodology = methodology or "相关研究"
         self.section_id = section_id
         api_key = os.environ.get(RAG_LLM_API_KEY_ENV, "")
         self._client = OpenAI(api_key=api_key, base_url=RAG_LLM_BASE_URL)
         self._evidence: list[str] = []
+        # 结构化证据池：保留完整原文 + 来源元数据，供后续引用核验（声明→来源回溯）
+        self._evidence_pool: list[dict] = []
         self._memory = None  # 懒加载
 
     def _get_memory(self):
@@ -134,28 +154,74 @@ class SectionWritingAgent(AgentBase):
 
     # ── Tool 实现 ──────────────────────────────────────────────────────────
 
-    def _search_kb(self, query: str, top_k: int = 5) -> list[dict]:
+    def _search_kb(self, query: str, top_k: int = 5, use_rewrite: bool = False) -> list[dict]:
+        """跨项目绑定的多个知识库检索，合并去重后按分数截断 top_k。"""
         from test.hybrid_search import HybridRetriever
         from test.document_processor import DocumentProcessor
         from server.database import get_connection
 
-        conn = get_connection()
-        kb_row = conn.execute(
-            "SELECT * FROM knowledge_bases WHERE id = ?", (self.kb_id,)
-        ).fetchone()
-        conn.close()
-        if not kb_row:
+        if not self.kb_ids:
             return []
 
-        proc = DocumentProcessor(kb_name=kb_row["name"], kb_id=self.kb_id)
-        retriever = HybridRetriever(
-            chroma_path=str(proc.chroma_dir()),
-            collection_name=proc.collection_name(),
-        )
-        results = retriever.search(
-            question=query, top_k=top_k, use_reranker=False, use_rewrite=False
-        )
-        return results[:top_k]
+        conn = get_connection()
+        merged: list[dict] = []
+        for kb_id in self.kb_ids:
+            kb_row = conn.execute(
+                "SELECT * FROM knowledge_bases WHERE id = ?", (kb_id,)
+            ).fetchone()
+            if not kb_row:
+                continue
+            proc = DocumentProcessor(kb_name=kb_row["name"], kb_id=kb_id)
+            retriever = HybridRetriever(
+                chroma_path=str(proc.chroma_dir()),
+                collection_name=proc.collection_name(),
+            )
+            try:
+                hits = retriever.search(
+                    question=query, top_k=top_k, use_reranker=False, use_rewrite=use_rewrite
+                )
+            except Exception:
+                hits = []
+            for h in hits:
+                h["_kb_id"] = kb_id
+            merged.extend(hits)
+        conn.close()
+
+        # 跨库去重（按 chunk_id，退化用 text 前 80 字），再按相关性排序
+        seen: set = set()
+        deduped: list[dict] = []
+        for r in merged:
+            key = r.get("chunk_id") or r.get("text", "")[:80]
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(r)
+
+        def _score(r: dict) -> float:
+            return r.get("rerank_score") or r.get("rrf_score") or r.get("vector_score") or 0.0
+
+        deduped.sort(key=_score, reverse=True)
+        return deduped[:top_k]
+
+    def _read_prior_context(self) -> str:
+        """读取本项目已生成的其他章节，构建连贯上下文（read_written_sections 工具用）。"""
+        from server.database import get_connection
+        from .section_memory import build_coherence_context
+
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT outline, sections_content FROM thesis_projects WHERE id = ?",
+            (self.project_id,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return ""
+        try:
+            outline = json.loads(row["outline"] or "{}")
+            sections = json.loads(row["sections_content"] or "{}")
+        except Exception:
+            return ""
+        return build_coherence_context(outline, sections, self.section_id)
 
     def _save_section(self, content: str, citations: list, word_count: int) -> None:
         from server.database import get_connection, now_iso
@@ -169,12 +235,21 @@ class SectionWritingAgent(AgentBase):
             sections = json.loads(row["sections_content"] or "{}")
         except Exception:
             sections = {}
-        sections[self.section_id] = {
+        new_sec = {
             "content": content,
             "citations": citations,
             "word_count": word_count,
             "status": "draft",
+            # 与草稿一同落库，作为引用核验的回溯依据
+            "evidence_pool": self._evidence_pool,
         }
+        # 内容已变更：保留旧摘要但置为 stale，待用户重新敲定后增量更新（不级联下游）
+        prev_summary = sections.get(self.section_id, {}).get("summary")
+        if prev_summary:
+            prev_summary = dict(prev_summary)
+            prev_summary["status"] = "stale"
+            new_sec["summary"] = prev_summary
+        sections[self.section_id] = new_sec
         conn.execute(
             "UPDATE thesis_projects SET sections_content = ?, updated_at = ? WHERE id = ?",
             (json.dumps(sections, ensure_ascii=False), now_iso(), self.project_id),
@@ -185,29 +260,65 @@ class SectionWritingAgent(AgentBase):
     # ── 主循环 ─────────────────────────────────────────────────────────────
 
     async def run(
-        self, section_title: str, key_points: list[str], topic: str
+        self,
+        section_title: str,
+        key_points: list[str],
+        topic: str,
+        requirement: str = "",
+        prior_context: str = "",
     ) -> AsyncGenerator[str, None]:
         kp_text = "\n".join(f"- {kp}" for kp in key_points)
 
         yield sse("agent_start", {
             "agent": self.name,
-            "message": f"开始撰写：{section_title}",
+            "message": f"开始撰写：{section_title}（{self.methodology}视角）",
         })
         self._log_trace("start", f"撰写章节：{section_title}")
 
+        # 关键词种子检索：以「标题 + 要点 + 要求」自动抽取关键词跨库混合检索，
+        # 命中片段作为首条 observation 注入，再进 ReAct 循环（贴合「自动提取关键词→检索→生成」）。
+        seed_query = " ".join([section_title, *key_points, requirement]).strip()
+        seed_hits = await asyncio.to_thread(self._search_kb, seed_query, 5, True)
+        seed_block = ""
+        if seed_hits:
+            lines = []
+            for r in seed_hits:
+                source = r.get("source", "unknown")
+                page = r.get("page", "?")
+                snippet = r.get("text", "")[:300]
+                lines.append(f"[来源: {source} 第{page}页] {snippet}")
+                self._evidence.append(f"[{source} 第{page}页] {snippet}")
+                self._evidence_pool.append({
+                    "source": source,
+                    "page": page,
+                    "chunk_id": r.get("chunk_id", ""),
+                    "text": r.get("text", ""),
+                })
+            seed_block = "已为本章预检索到以下文献片段（可直接引用，也可继续检索补充）：\n" + "\n\n".join(lines)
+            yield sse("tool_result", {
+                "agent": self.name,
+                "tool": "seed_search",
+                "preview": f"预检索命中 {len(seed_hits)} 条（跨 {len(self.kb_ids)} 个知识库）",
+            })
+            self._log_trace("tool_result", seed_block[:300], tool_name="seed_search")
+
         messages = [
-            {"role": "system", "content": _SYSTEM},
-            {
-                "role": "user",
-                "content": (
-                    f"请撰写以下论文章节：\n\n"
-                    f"**论文主题**：{topic}\n"
-                    f"**章节标题**：{section_title}\n"
-                    f"**关键要点**：\n{kp_text}\n\n"
-                    f"请先搜索相关文献，然后调用 write_section_draft 提交章节正文。"
-                ),
-            },
+            {"role": "system", "content": WRITING_SYSTEM.format(methodology=self.methodology)},
         ]
+        # 共享写作记忆：注入已生成章节摘要，保持跨章节论证连贯
+        if prior_context:
+            messages.append({"role": "user", "content": prior_context})
+        if seed_block:
+            messages.append({"role": "user", "content": seed_block})
+        messages.append({
+            "role": "user",
+            "content": WRITING_USER.format(
+                topic=topic,
+                section_title=section_title,
+                key_points=kp_text,
+                requirement=requirement or "（无特殊要求，按学术规范撰写）",
+            ),
+        })
 
         for _iteration in range(10):
             t0 = time.time()
@@ -311,6 +422,13 @@ class SectionWritingAgent(AgentBase):
                         page = r.get("page", "?")
                         hits.append({"source": f"{source}.pdf 第{page}页", "text": snippet})
                         self._evidence.append(f"[{source} 第{page}页] {snippet}")
+                        # 结构化留存（完整原文 + 来源元数据），供引用核验回溯
+                        self._evidence_pool.append({
+                            "source": source,
+                            "page": page,
+                            "chunk_id": r.get("chunk_id", ""),
+                            "text": r.get("text", ""),
+                        })
                     result_str = json.dumps(hits, ensure_ascii=False)
                     tool_latency = int((time.time() - t1) * 1000)
 
@@ -358,6 +476,18 @@ class SectionWritingAgent(AgentBase):
                     )
                     # 写作完成，立即返回
                     return
+
+                elif fn_name == "read_written_sections":
+                    ctx = await asyncio.to_thread(self._read_prior_context)
+                    result_str = ctx or "（暂无其他已生成章节）"
+                    tool_latency = int((time.time() - t1) * 1000)
+                    yield sse("tool_result", {
+                        "agent": self.name, "tool": fn_name,
+                        "preview": result_str[:200],
+                        "latency_ms": tool_latency,
+                    })
+                    self._log_trace("tool_result", result_str[:300], tool_name=fn_name, latency_ms=tool_latency)
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": result_str})
 
                 else:
                     result_str = "未知工具"

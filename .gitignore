@@ -1,35 +1,53 @@
+# Python
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration and secrets
 .env
+.env.*
+!.env.example
 server/runtime_config.json
-output/
-*.ipynb_checkpoints/
+*.key
+*.pem
+*.p12
+*.pfx
 
-# IDE
-.idea/
-
-# Claude
-.claude/
-
-# 数据库文件
+# Runtime data and generated artifacts
 data/
-*.db
-
-# 上传的 PDF 原文件（体积大、含用户数据）
+output/
 primary_datas/
+*.db
+*.sqlite
+*.sqlite3
 
-# 前端
+# Frontend
 node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
 
 # Logs
 *.log
+logs/
 
-# 系统文件
+# Tool and editor state
+.idea/
+.vscode/
+.claude/
+.codex/
+.agents/
+.uv-cache/
+*.ipynb_checkpoints/
+
+# System files
 .DS_Store
 Thumbs.db
 
-# 误存的 HTML 文件
+# Large local installer/export artifacts
 install.cmd

@@ -18,32 +18,9 @@ from openai import OpenAI
 
 from test.config import RAG_LLM_API_KEY_ENV, RAG_LLM_BASE_URL, RAG_LLM_MODEL
 from .base import AgentBase, sse
+from .prompts import REVIEW_SYSTEM
 
 HITL_THRESHOLD = 3.0  # overall_score 低于此值时触发 HITL
-
-_SYSTEM = """\
-你是一名严格的学术论文评审专家。请对提供的论文章节进行多维度评审。
-
-输出严格的 JSON，不包含任何解释或 markdown（直接输出花括号开头的 JSON）：
-{
-  "logic_score": 0-5的浮点数,
-  "academic_tone": 0-5的浮点数,
-  "citation_coverage": 0-5的浮点数,
-  "argument_support": 0-5的浮点数,
-  "overall_score": 0-5的浮点数（以上四项加权平均）,
-  "strengths": ["优点1", "优点2"],
-  "suggestions": ["具体改进建议1", "具体改进建议2", "具体改进建议3"],
-  "rewrite_needed": true或false
-}
-
-评分标准（0-5分）：
-- logic_score（逻辑严密性）：论证结构是否清晰，推理是否有效
-- academic_tone（学术规范性）：语言是否学术规范，避免口语化
-- citation_coverage（引用充分度）：关键论点是否有文献支撑，引用格式是否规范
-- argument_support（论点支撑度）：论据是否充分支撑论点，证据是否可靠
-- overall_score：综合评分，5分为满分，3分为合格线
-
-rewrite_needed 为 true 的条件：overall_score < 3.0 或存在严重逻辑错误"""
 
 
 class ReviewAgent(AgentBase):
@@ -56,7 +33,11 @@ class ReviewAgent(AgentBase):
         self._client = OpenAI(api_key=api_key, base_url=RAG_LLM_BASE_URL)
 
     async def run(
-        self, section_title: str, content: str, topic: str
+        self,
+        section_title: str,
+        content: str,
+        topic: str,
+        citation_report: dict | None = None,
     ) -> AsyncGenerator[str, None]:
         yield sse("agent_start", {
             "agent": self.name,
@@ -64,10 +45,24 @@ class ReviewAgent(AgentBase):
         })
         self._log_trace("start", f"评审章节：{section_title}")
 
+        # 客观引用核验结果作为 citation_coverage 打分的事实锚点（避免纯主观）
+        citation_fact = ""
+        if citation_report and citation_report.get("total", 0) > 0:
+            citation_fact = (
+                f"\n\n【系统引用核验（客观事实，请据此评 citation_coverage）】\n"
+                f"共 {citation_report['total']} 条引用，"
+                f"真实且支撑 {citation_report.get('verified_count', 0)} 条，"
+                f"来源存疑 {citation_report.get('weak_count', 0)} 条，"
+                f"编造来源 {citation_report.get('fabricated_count', 0)} 条，"
+                f"引用准确率 {citation_report.get('citation_accuracy', 0):.0%}。"
+                f"若存在编造来源，citation_coverage 不得高于 2.0。"
+            )
+
         user_msg = (
             f"论文主题：{topic}\n"
             f"章节标题：{section_title}\n\n"
             f"章节内容：\n{content[:4000]}"  # 避免超出 context window
+            f"{citation_fact}"
         )
 
         t0 = time.time()
@@ -77,7 +72,7 @@ class ReviewAgent(AgentBase):
             temperature=0.2,
             max_tokens=800,
             messages=[
-                {"role": "system", "content": _SYSTEM},
+                {"role": "system", "content": REVIEW_SYSTEM},
                 {"role": "user", "content": user_msg},
             ],
         )

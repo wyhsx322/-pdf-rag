@@ -1,68 +1,43 @@
 import { useNavigate } from 'react-router-dom'
+import { Library, FileText, Trash2 } from 'lucide-react'
 import type { KnowledgeBase } from '../types'
-import { KB_TYPE_LABELS, KB_TYPE_ICONS } from '../types'
+import { KB_TYPE_LABELS } from '../types'
+import Card from './ui/Card'
+import Badge from './ui/Badge'
 
-interface KBCardProps {
-  kb: KnowledgeBase
-  onDelete: (id: number) => void
+const typeTone: Record<string, 'blue' | 'emerald' | 'violet'> = {
+  work: 'blue', study: 'emerald', personal: 'violet',
 }
 
-export default function KBCard({ kb, onDelete }: KBCardProps) {
+export default function KBCard({ kb, onDelete }: { kb: KnowledgeBase; onDelete: (id: number) => void }) {
   const navigate = useNavigate()
-
-  const typeColors: Record<string, string> = {
-    work: 'bg-blue-50 text-blue-700 border-blue-200',
-    study: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    personal: 'bg-purple-50 text-purple-700 border-purple-200',
-  }
-
   return (
-    <div
-      onClick={() => navigate(`/kb/${kb.id}`)}
-      className="group bg-white rounded-xl border border-gray-200 p-6 cursor-pointer
-        shadow-sm hover:shadow-md hover:border-indigo-300 transition-all duration-200
-        hover:-translate-y-0.5"
-    >
-      <div className="flex items-start justify-between mb-4">
-        <span className="text-3xl">{KB_TYPE_ICONS[kb.type]}</span>
+    <Card hover onClick={() => navigate(`/knowledge/${kb.id}`)} className="group cursor-pointer p-5">
+      <div className="mb-4 flex items-start justify-between">
+        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/10 to-violet-500/10 text-indigo-500">
+          <Library className="h-5 w-5" />
+        </div>
         <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onDelete(kb.id)
-          }}
-          className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-gray-400
-            hover:text-red-500 hover:bg-red-50 transition-all duration-150"
+          onClick={e => { e.stopPropagation(); onDelete(kb.id) }}
+          className="rounded-lg p-1.5 text-slate-300 opacity-0 transition-all hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
           title="删除知识库"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
+          <Trash2 className="h-4 w-4" />
         </button>
       </div>
 
-      <h3 className="font-semibold text-gray-900 mb-1.5 truncate">{kb.name}</h3>
+      <h3 className="mb-1 truncate font-semibold text-slate-800">{kb.name}</h3>
+      <p className={`mb-4 line-clamp-2 text-sm ${kb.description ? 'text-slate-500' : 'italic text-slate-300'}`}>
+        {kb.description || '暂无描述'}
+      </p>
 
-      {kb.description ? (
-        <p className="text-sm text-gray-500 mb-3 line-clamp-2">{kb.description}</p>
-      ) : (
-        <p className="text-sm text-gray-400 mb-3 italic">暂无描述</p>
-      )}
-
-      <div className="flex items-center justify-between">
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${typeColors[kb.type]}`}>
-          {KB_TYPE_LABELS[kb.type]}
-        </span>
-        <span className="text-xs text-gray-400">
+      <div className="flex items-center justify-between border-t border-slate-100 pt-3">
+        <Badge tone={typeTone[kb.type]}>{KB_TYPE_LABELS[kb.type]}</Badge>
+        <span className="flex items-center gap-1 text-xs text-slate-400">
+          <FileText className="h-3.5 w-3.5" />
           {kb.document_count} 个文档
         </span>
       </div>
-
-      <div className="mt-3 pt-3 border-t border-gray-100">
-        <span className="text-xs text-gray-400">
-          创建于 {new Date(kb.created_at).toLocaleDateString('zh-CN')}
-        </span>
-      </div>
-    </div>
+    </Card>
   )
 }

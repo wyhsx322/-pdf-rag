@@ -35,10 +35,11 @@ agents 可以是空列表、单个 agent 或两者都有（按顺序执行）。
 class CoordinatorAgent(AgentBase):
     name = "协调器"
 
-    def __init__(self, project_id: int, kb_id: int):
+    def __init__(self, project_id: int, kb_id: int, methodology: str = ""):
         session_id = uuid.uuid4().hex[:8]
         super().__init__(project_id, session_id)
         self.kb_id = kb_id
+        self.methodology = methodology
         api_key = os.environ.get(RAG_LLM_API_KEY_ENV, "")
         self._client = OpenAI(api_key=api_key, base_url=RAG_LLM_BASE_URL)
 
@@ -106,7 +107,7 @@ class CoordinatorAgent(AgentBase):
 
         # 大纲规划 Agent
         if "outline" in agents_to_call:
-            outline_agent = OutlineAgent(self.project_id, self.session_id)
+            outline_agent = OutlineAgent(self.project_id, self.session_id, self.methodology)
             async for event in outline_agent.run(topic, literature_summary):
                 yield event
 

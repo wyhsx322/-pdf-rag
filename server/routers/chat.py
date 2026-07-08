@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from server.database import get_connection
+from server.memory import MemoryManager
 from test.document_processor import DocumentProcessor
 
 router = APIRouter()
@@ -36,6 +37,7 @@ class ChatRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=50)
     use_reranker: bool = Field(default=False)
     use_rewrite: bool = Field(default=True)
+    conversation_id: Optional[int] = Field(default=None, description="Conversation ID")
 
 
 # ── 系统提示词 ──
@@ -217,13 +219,57 @@ async def chat(req: ChatRequest):
 
         # 构建消息列表（含历史对话）
         api_key = os.environ.get(RAG_LLM_API_KEY_ENV, "")
+        memory_manager = MemoryManager()
+        history = [{"role": msg.role, "content": msg.content} for msg in req.history]
+        memory_bundle = memory_manager.build_chat_memory(
+            kb_id=req.kb_id,
+            question=req.question,
+            history=history,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+
+        usage_id = memory_manager.long_term.record_usage(
+            kb_id=req.kb_id,
+            project_id=None,
+            conversation_id=req.conversation_id,
+            question=req.question,
+            memories=memory_bundle.long_memories,
+        )
+        if memory_bundle.long_memories:
+            used_msg = json.dumps({
+                "type": "memory_used",
+                "usage_id": usage_id,
+                "memories": [
+                    {
+                        "id": m.get("id"),
+                        "category": m.get("category"),
+                        "content": m.get("content"),
+                        "score": m.get("score", 0),
+                    }
+                    for m in memory_bundle.long_memories
+                ],
+            }, ensure_ascii=False)
+            yield f"data: {used_msg}\n\n"
+
+        if memory_bundle.short_term.compressed:
+            compressed_msg = json.dumps({
+                "type": "short_memory_summary",
+                "summary": memory_bundle.short_term.summary,
+                "estimated_tokens": memory_bundle.short_term.estimated_tokens,
+            }, ensure_ascii=False)
+            yield f"data: {compressed_msg}\n\n"
+
+        api_key = os.environ.get(RAG_LLM_API_KEY_ENV, "")
         client = OpenAI(api_key=api_key, base_url=RAG_LLM_BASE_URL)
 
         messages = [{"role": "system", "content": system_prompt}]
 
         # 添加历史对话（最近 10 轮，避免上下文过长）
-        for msg in req.history[-20:]:
-            messages.append({"role": msg.role, "content": msg.content})
+        if memory_bundle.memory_prompt:
+            messages.append({"role": "user", "content": memory_bundle.memory_prompt})
+
+        messages.extend(memory_bundle.short_term.messages)
 
         messages.append({"role": "user", "content": user_prompt})
 
@@ -256,6 +302,27 @@ async def chat(req: ChatRequest):
 
             # 完成信号
             full_text = "".join(full_answer)
+            memory_candidate = None
+            try:
+                proposed = memory_manager.long_term.propose_from_exchange(
+                    req.question,
+                )
+                if proposed:
+                    memory_candidate = memory_manager.long_term.create_candidate(
+                        kb_id=req.kb_id,
+                        project_id=None,
+                        conversation_id=req.conversation_id,
+                        candidate=proposed,
+                        user_message=req.question,
+                        assistant_message=full_text,
+                    )
+                    candidate_msg = json.dumps({
+                        "type": "memory_candidate",
+                        "candidate": memory_candidate,
+                    }, ensure_ascii=False)
+                    yield f"data: {candidate_msg}\n\n"
+            except Exception:
+                memory_candidate = None
             # 记录用量
             try:
                 from server.usage_tracker import record_usage
@@ -275,7 +342,7 @@ async def chat(req: ChatRequest):
                     operation="rag_chat",
                     kb_id=req.kb_id,
                     kb_name=kb_name,
-                    input_text=req.question + "\n" + references,
+                    input_text=req.question + "\n" + references + "\n" + memory_bundle.memory_prompt,
                     output_text=full_text,
                 )
             except Exception:
@@ -286,6 +353,16 @@ async def chat(req: ChatRequest):
                 "full_answer": full_text,
                 "sources": source_lines,
                 "figures": figures_info,
+                "memory_candidate": memory_candidate,
+                "memory_used": [
+                    {
+                        "id": m.get("id"),
+                        "category": m.get("category"),
+                        "content": m.get("content"),
+                        "score": m.get("score", 0),
+                    }
+                    for m in memory_bundle.long_memories
+                ],
             }, ensure_ascii=False)
             yield f"data: {done}\n\n"
 

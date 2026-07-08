@@ -50,6 +50,23 @@ class SearchResultItem(BaseModel):
     image_path: Optional[str] = None
 
 
+class SearchDiagnostics(BaseModel):
+    """面向调优的检索质量诊断。"""
+    result_count: int = 0
+    unique_sources: int = 0
+    figure_results: int = 0
+    avg_text_chars: int = 0
+    top_source: Optional[str] = None
+    top_source_share: float = 0.0
+    best_vector_score: float = 0.0
+    best_bm25_score: float = 0.0
+    best_rrf_score: float = 0.0
+    score_spread: float = 0.0
+    confidence: str = "low"
+    risks: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+
 class SearchResponse(BaseModel):
     """检索结果响应"""
     query: str
@@ -57,6 +74,7 @@ class SearchResponse(BaseModel):
     search_mode: str  # 描述使用的检索策略
     results: list[SearchResultItem]
     elapsed_seconds: float
+    diagnostics: SearchDiagnostics = Field(default_factory=SearchDiagnostics)
 
 
 @router.post("/search", response_model=SearchResponse)
@@ -105,6 +123,7 @@ def hybrid_search(req: SearchRequest):
             search_mode=_describe_mode(req),
             results=[],
             elapsed_seconds=0,
+            diagnostics=_build_diagnostics([], req),
         )
 
     # ── 预计算查询处理（仅一次 LLM 调用） ──────────────────────────
@@ -153,6 +172,7 @@ def hybrid_search(req: SearchRequest):
             search_mode=_describe_mode(req),
             results=[],
             elapsed_seconds=0,
+            diagnostics=_build_diagnostics([], req),
         )
 
     # 按 chunk_id 去重
@@ -222,6 +242,7 @@ def hybrid_search(req: SearchRequest):
         search_mode=_describe_mode(req),
         results=items,
         elapsed_seconds=elapsed,
+        diagnostics=_build_diagnostics(items, req),
     )
 
 
@@ -236,3 +257,91 @@ def _describe_mode(req: SearchRequest) -> str:
     if req.use_reranker:
         parts.append("BGE-Reranker 重排序")
     return " + ".join(parts)
+
+
+def _build_diagnostics(items: list[SearchResultItem], req: SearchRequest) -> SearchDiagnostics:
+    """从检索结果中提取可观测的调优信号。"""
+    if not items:
+        return SearchDiagnostics(
+            confidence="low",
+            risks=["没有召回可用于回答的片段"],
+            recommendations=[
+                "先确认文档已完成入库和向量化",
+                "尝试开启查询改写或降低问题中的限定条件",
+            ],
+        )
+
+    source_counts: dict[str, int] = {}
+    for item in items:
+        source = item.source or "unknown"
+        source_counts[source] = source_counts.get(source, 0) + 1
+
+    top_source, top_count = max(source_counts.items(), key=lambda kv: kv[1])
+    result_count = len(items)
+    top_share = round(top_count / result_count, 3)
+    rrf_scores = [item.rrf_score for item in items]
+    score_spread = round(max(rrf_scores) - min(rrf_scores), 6) if len(rrf_scores) > 1 else 0.0
+    best_vector = max((item.vector_score for item in items), default=0.0)
+    best_bm25 = max((item.bm25_score for item in items), default=0.0)
+    best_rrf = max(rrf_scores, default=0.0)
+    avg_chars = round(sum(len(item.text or "") for item in items) / result_count)
+    figure_count = sum(1 for item in items if item.is_figure)
+
+    risks: list[str] = []
+    recommendations: list[str] = []
+
+    if result_count < min(req.top_k, 5):
+        risks.append("召回数量偏少，可能导致回答证据不足")
+        recommendations.append("检查切片大小、文档入库范围，或开启查询改写扩大召回")
+
+    if top_share >= 0.7 and len(source_counts) > 1:
+        risks.append("结果过度集中在单篇文档，跨文档覆盖不足")
+        recommendations.append("提高 top_k 或增加多视角查询，观察不同论文的覆盖变化")
+
+    if best_vector < 0.25 and best_bm25 <= 0:
+        risks.append("语义相似度和关键词命中都偏弱")
+        recommendations.append("把问题改写为论文中的术语，或补充同义词/英文关键词")
+
+    if score_spread < 0.005 and result_count >= 5:
+        risks.append("候选片段分数接近，排序区分度不足")
+        recommendations.append("开启 reranker，或用更明确的实体、方法、指标约束查询")
+
+    if avg_chars < 120:
+        risks.append("平均片段较短，可能缺少完整论证上下文")
+        recommendations.append("适当增大 chunk_size 或 overlap 后重新入库")
+    elif avg_chars > 1800:
+        risks.append("平均片段较长，可能引入噪声")
+        recommendations.append("减小 chunk_size，优先按章节/段落边界切分")
+
+    if figure_count > 0 and not req.use_reranker:
+        recommendations.append("包含图表证据时，可开启 reranker 验证文本与图片摘要的相关性")
+
+    if not req.use_rewrite:
+        recommendations.append("开启查询改写通常能提升中文论文场景的 Recall@K")
+
+    if not risks:
+        risks.append("未发现明显召回风险")
+    if not recommendations:
+        recommendations.append("保留当前策略，并用黄金问题集继续做 Recall/MRR 对比")
+
+    confidence = "high"
+    if result_count < 5 or best_rrf < 0.02 or len(risks) >= 3:
+        confidence = "low"
+    elif len(risks) >= 2 or top_share >= 0.7:
+        confidence = "medium"
+
+    return SearchDiagnostics(
+        result_count=result_count,
+        unique_sources=len(source_counts),
+        figure_results=figure_count,
+        avg_text_chars=avg_chars,
+        top_source=top_source,
+        top_source_share=top_share,
+        best_vector_score=round(best_vector, 6),
+        best_bm25_score=round(best_bm25, 6),
+        best_rrf_score=round(best_rrf, 6),
+        score_spread=score_spread,
+        confidence=confidence,
+        risks=risks,
+        recommendations=recommendations,
+    )

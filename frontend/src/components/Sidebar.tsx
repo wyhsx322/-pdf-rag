@@ -1,79 +1,155 @@
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import {
+  MessageSquare, Library, Search, PenLine, Settings,
+  Plus, PanelLeftClose, PanelLeft, Sparkles, Trash2,
+} from 'lucide-react'
+import { useChatContext } from '../context/ChatContext'
+import { useAppStore } from '../store/useAppStore'
+import { cn } from '../lib/cn'
 
 const navItems = [
-  { to: '/', label: '知识库', icon: (
-    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-        d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-    </svg>
-  )},
-  { to: '/chunking', label: '智能切片', icon: (
-    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-        d="M4 6h16M4 12h16M4 18h7" />
-    </svg>
-  )},
-  { to: '/search', label: '混合检索', icon: (
-    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-    </svg>
-  )},
-  { to: '/chat', label: '问答对话', icon: (
-    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-        d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-    </svg>
-  )},
-  { to: '/thesis', label: '论文助手', icon: (
-    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-    </svg>
-  )},
+  { to: '/', label: '对话', icon: MessageSquare, exact: true },
+  { to: '/knowledge', label: '知识库', icon: Library },
+  { to: '/search', label: 'RAG 检索', icon: Search },
+  { to: '/writing', label: '论文写作', icon: PenLine },
 ]
 
 export default function Sidebar() {
   const location = useLocation()
+  const navigate = useNavigate()
+  const collapsed = useAppStore(s => s.sidebarCollapsed)
+  const toggleSidebar = useAppStore(s => s.toggleSidebar)
+
+  const { conversations, currentConvId, selectConversation, newConversation, deleteConversation, loading } = useChatContext()
+  const onChatRoute = location.pathname === '/'
+
+  const handleNew = () => {
+    newConversation()
+    navigate('/')
+  }
+
+  const handleSelect = (id: number) => {
+    if (loading) return
+    selectConversation(id)
+    navigate('/')
+  }
 
   return (
-    <aside className="w-60 bg-slate-900 flex flex-col shrink-0">
-      {/* Logo 区域 */}
-      <div className="h-16 flex items-center px-6 border-b border-slate-700/50">
-        <span className="text-xl mr-2.5">📄</span>
-        <div>
-          <h1 className="text-sm font-semibold text-white leading-tight">论文 RAG</h1>
-          <p className="text-xs text-slate-400 leading-tight">知识库管理系统</p>
+    <aside
+      className={cn(
+        'flex shrink-0 flex-col border-r border-slate-200 bg-white transition-all duration-200',
+        collapsed ? 'w-[68px]' : 'w-64',
+      )}
+    >
+      {/* Logo */}
+      <div className="flex h-16 items-center gap-2.5 px-4">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-500 shadow-glow">
+          <Sparkles className="h-5 w-5 text-white" />
         </div>
+        {!collapsed && (
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-semibold text-slate-800">论文智能体</h1>
+            <p className="truncate text-xs text-slate-400">Multi-Agent Writing</p>
+          </div>
+        )}
       </div>
 
-      {/* 导航菜单 */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {navItems.map(item => {
-          const isActive = item.to === '/'
-            ? location.pathname === '/' || location.pathname.startsWith('/kb/')
-            : location.pathname.startsWith(item.to)
+      {/* 新对话 */}
+      <div className="px-3 pb-2">
+        <button
+          onClick={handleNew}
+          className={cn(
+            'flex w-full items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 px-3 py-2.5 text-sm font-medium text-white shadow-soft transition-all hover:shadow-glow hover:brightness-105',
+            collapsed && 'justify-center px-0',
+          )}
+        >
+          <Plus className="h-4 w-4 shrink-0" />
+          {!collapsed && '新对话'}
+        </button>
+      </div>
 
+      {/* 主导航 */}
+      <nav className="space-y-1 px-3 py-2">
+        {navItems.map(item => {
+          const active = item.exact
+            ? location.pathname === '/'
+            : location.pathname.startsWith(item.to)
+          const Icon = item.icon
           return (
             <NavLink
               key={item.to}
               to={item.to}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
-                isActive
-                  ? 'bg-indigo-500/20 text-indigo-300'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-              }`}
+              className={cn(
+                'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
+                active ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800',
+                collapsed && 'justify-center px-0',
+              )}
+              title={collapsed ? item.label : undefined}
             >
-              {item.icon}
-              {item.label}
+              <Icon className="h-[18px] w-[18px] shrink-0" />
+              {!collapsed && item.label}
             </NavLink>
           )
         })}
       </nav>
 
-      {/* 底部信息 */}
-      <div className="px-6 py-4 border-t border-slate-700/50">
-        <p className="text-xs text-slate-500">v2.0.0 · Multi-Agent</p>
+      {/* 会话历史（仅对话路由、展开态） */}
+      {onChatRoute && !collapsed && (
+        <div className="flex min-h-0 flex-1 flex-col px-3 pt-2">
+          <p className="px-2 pb-1.5 text-xs font-medium text-slate-400">最近对话</p>
+          <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+            {conversations.length === 0 ? (
+              <p className="px-2 py-3 text-xs text-slate-300">暂无历史对话</p>
+            ) : (
+              conversations.map(c => (
+                <div
+                  key={c.id}
+                  className={cn(
+                    'group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors',
+                    currentConvId === c.id ? 'bg-slate-100 text-slate-800' : 'text-slate-500 hover:bg-slate-50',
+                  )}
+                  onClick={() => handleSelect(c.id)}
+                >
+                  <span className="min-w-0 flex-1 truncate">{c.title || '未命名对话'}</span>
+                  <button
+                    onClick={e => { e.stopPropagation(); deleteConversation(c.id) }}
+                    className="shrink-0 text-slate-300 opacity-0 transition-opacity hover:text-rose-500 group-hover:opacity-100"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {!onChatRoute && <div className="flex-1" />}
+
+      {/* 底部：设置 + 折叠 */}
+      <div className="space-y-1 border-t border-slate-100 p-3">
+        <NavLink
+          to="/settings"
+          className={cn(
+            'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
+            location.pathname.startsWith('/settings') ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800',
+            collapsed && 'justify-center px-0',
+          )}
+          title={collapsed ? '设置' : undefined}
+        >
+          <Settings className="h-[18px] w-[18px] shrink-0" />
+          {!collapsed && '模型配置'}
+        </NavLink>
+        <button
+          onClick={toggleSidebar}
+          className={cn(
+            'flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700',
+            collapsed && 'justify-center px-0',
+          )}
+        >
+          {collapsed ? <PanelLeft className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
+          {!collapsed && '收起边栏'}
+        </button>
       </div>
     </aside>
   )

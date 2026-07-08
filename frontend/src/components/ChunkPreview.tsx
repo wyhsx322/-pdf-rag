@@ -1,93 +1,54 @@
+import { FlaskConical } from 'lucide-react'
 import type { ChunkResult } from '../types'
+import { Badge, Spinner } from './ui'
 
-interface ChunkPreviewProps {
+interface Props {
   chunks: ChunkResult[]
   totalChunks: number
   avgChunkSize: number
   loading: boolean
 }
 
-export default function ChunkPreview({ chunks, totalChunks, avgChunkSize, loading }: ChunkPreviewProps) {
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
-  }
+export default function ChunkPreview({ chunks, totalChunks, avgChunkSize, loading }: Props) {
+  if (loading) return <div className="flex justify-center py-20"><Spinner className="h-7 w-7" /></div>
 
   if (chunks.length === 0) {
     return (
-      <div className="text-center py-20">
-        <span className="text-4xl mb-3 block">🔬</span>
-        <p className="text-sm text-gray-400">配置左侧参数后，点击「预览切片」查看效果</p>
+      <div className="flex flex-col items-center py-20 text-center">
+        <FlaskConical className="mb-3 h-9 w-9 text-slate-300" />
+        <p className="text-sm text-slate-400">配置参数后点击「预览切片」查看效果</p>
       </div>
     )
   }
 
+  const figureCount = chunks.filter(c => c.has_figure).length
+
   return (
     <div className="space-y-4">
-      {/* 统计信息 */}
       <div className="grid grid-cols-3 gap-3">
-        <div className="bg-indigo-50 rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-indigo-700">{totalChunks}</p>
-          <p className="text-xs text-indigo-500 mt-1">总块数</p>
-        </div>
-        <div className="bg-emerald-50 rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-emerald-700">{avgChunkSize}</p>
-          <p className="text-xs text-emerald-500 mt-1">平均字符数</p>
-        </div>
-        <div className="bg-amber-50 rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-amber-700">
-            {chunks.filter(c => c.has_figure).length}
-          </p>
-          <p className="text-xs text-amber-500 mt-1">含图片块</p>
-        </div>
+        {[
+          { v: totalChunks, l: '总块数', c: 'text-indigo-600 bg-indigo-50' },
+          { v: avgChunkSize, l: '平均字符', c: 'text-emerald-600 bg-emerald-50' },
+          { v: figureCount, l: '含图片块', c: 'text-amber-600 bg-amber-50' },
+        ].map(s => (
+          <div key={s.l} className={`rounded-xl p-3.5 text-center ${s.c}`}>
+            <p className="text-xl font-bold">{s.v}</p>
+            <p className="mt-0.5 text-xs opacity-70">{s.l}</p>
+          </div>
+        ))}
       </div>
 
-      {/* 切片列表 */}
-      <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+      <div className="max-h-[560px] space-y-2.5 overflow-y-auto pr-1">
         {chunks.map((chunk, i) => (
-          <div
-            key={chunk.chunk_id || i}
-            className="bg-white rounded-lg border border-gray-200 p-4 hover:border-indigo-300 transition-colors"
-          >
-            {/* 块头部 */}
-            <div className="flex items-center gap-2 mb-2">
-              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-600 font-mono">
-                {chunk.chunk_id || `#${i + 1}`}
-              </span>
-              {chunk.page > 0 && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-50 text-blue-600">
-                  第 {chunk.page} 页
-                </span>
-              )}
-              <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">
-                {chunk.text_length} 字符
-              </span>
-              {chunk.has_figure && (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-50 text-amber-600">
-                  含图片
-                </span>
-              )}
+          <div key={chunk.chunk_id || i} className="rounded-xl border border-slate-200 p-3.5 transition-colors hover:border-indigo-200">
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <Badge tone="slate" className="font-mono">{chunk.chunk_id || `#${i + 1}`}</Badge>
+              {chunk.page > 0 && <Badge tone="blue">第 {chunk.page} 页</Badge>}
+              <Badge tone="slate">{chunk.text_length} 字符</Badge>
+              {chunk.has_figure && <Badge tone="amber">含图片</Badge>}
             </div>
-
-            {/* 文本内容 */}
-            <div className="relative">
-              <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap break-all">
-                {chunk.text}
-              </p>
-              {chunk.text_length > 500 && (
-                <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-white to-transparent pointer-events-none" />
-              )}
-            </div>
-
-            {/* 截断提示 */}
-            {chunk.text_length > 500 && (
-              <p className="text-xs text-gray-400 mt-1">
-                （预览显示前 500 字符，完整内容共 {chunk.text_length} 字符）
-              </p>
-            )}
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-600">{chunk.text}</p>
+            {chunk.text_length > 500 && <p className="mt-1 text-xs text-slate-400">（预览前 500 字，完整 {chunk.text_length} 字）</p>}
           </div>
         ))}
       </div>

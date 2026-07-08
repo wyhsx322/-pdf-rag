@@ -105,12 +105,29 @@ export interface SearchResultItem {
   image_path: string | null
 }
 
+export interface SearchDiagnostics {
+  result_count: number
+  unique_sources: number
+  figure_results: number
+  avg_text_chars: number
+  top_source: string | null
+  top_source_share: number
+  best_vector_score: number
+  best_bm25_score: number
+  best_rrf_score: number
+  score_spread: number
+  confidence: 'low' | 'medium' | 'high'
+  risks: string[]
+  recommendations: string[]
+}
+
 export interface SearchResponse {
   query: string
   total_results: number
   search_mode: string
   results: SearchResultItem[]
   elapsed_seconds: number
+  diagnostics: SearchDiagnostics
 }
 
 export async function hybridSearch(
@@ -139,6 +156,26 @@ export interface ChatMessage {
   content: string
 }
 
+export interface LongTermMemoryCandidate {
+  id: number
+  kb_id: number | null
+  project_id: number | null
+  conversation_id: number | null
+  category: string
+  content: string
+  reason: string
+  status: 'pending' | 'approved' | 'rejected'
+  created_at: string
+  updated_at: string
+}
+
+export interface LongTermMemoryUsed {
+  id: number
+  category: string
+  content: string
+  score: number
+}
+
 export function chatQA(
   kbId: number,
   question: string,
@@ -146,13 +183,17 @@ export function chatQA(
   topK: number,
   useReranker: boolean,
   useRewrite: boolean,
+  conversationId: number | null,
   onText: (text: string) => void,
   onSource: (source: string) => void,
   onDone: (fullAnswer: string, sources: string[], figures: Array<{
     chunk_id: string; source: string; image_file: string;
     caption: string; page: number | null; figure_type: string;
-  }>) => void,
+  }>, memoryUsed?: LongTermMemoryUsed[], memoryCandidate?: LongTermMemoryCandidate | null) => void,
   onError: (error: string) => void,
+  onMemoryCandidate?: (candidate: LongTermMemoryCandidate) => void,
+  onMemoryUsed?: (memories: LongTermMemoryUsed[]) => void,
+  onShortMemorySummary?: (summary: string, estimatedTokens: number) => void,
 ): AbortController {
   const controller = new AbortController()
 
@@ -166,6 +207,7 @@ export function chatQA(
       top_k: topK,
       use_reranker: useReranker,
       use_rewrite: useRewrite,
+      conversation_id: conversationId,
     }),
     signal: controller.signal,
   }).then(async (response) => {
@@ -200,8 +242,20 @@ export function chatQA(
               onText(parsed.content)
             } else if (parsed.type === 'source') {
               onSource(parsed.content)
+            } else if (parsed.type === 'memory_used') {
+              onMemoryUsed?.(parsed.memories || [])
+            } else if (parsed.type === 'memory_candidate') {
+              if (parsed.candidate) onMemoryCandidate?.(parsed.candidate)
+            } else if (parsed.type === 'short_memory_summary') {
+              onShortMemorySummary?.(parsed.summary || '', parsed.estimated_tokens || 0)
             } else if (parsed.type === 'done') {
-              onDone(parsed.full_answer || '', parsed.sources || [], parsed.figures || [])
+              onDone(
+                parsed.full_answer || '',
+                parsed.sources || [],
+                parsed.figures || [],
+                parsed.memory_used || [],
+                parsed.memory_candidate || null,
+              )
             } else if (parsed.type === 'error') {
               onError(parsed.content)
             }
@@ -218,6 +272,16 @@ export function chatQA(
   })
 
   return controller
+}
+
+export async function approveLongTermMemoryCandidate(id: number): Promise<LongTermMemoryCandidate> {
+  const { data } = await api.post(`/memory/long-term/candidates/${id}/approve`)
+  return data
+}
+
+export async function rejectLongTermMemoryCandidate(id: number): Promise<LongTermMemoryCandidate> {
+  const { data } = await api.post(`/memory/long-term/candidates/${id}/reject`)
+  return data
 }
 
 // ── 批量处理（SSE 流式进度） ──
@@ -343,4 +407,41 @@ export async function appendMessages(
   messages: { role: string; content: string; sources: string[] }[],
 ): Promise<void> {
   await api.post(`/conversations/${convId}/messages`, { messages })
+}
+
+// ── 模型 / API Key 配置 ──
+
+export interface KeyState {
+  configured: boolean
+  hint: string // 掩码提示，如 "••••3a7f"
+}
+
+export interface ModelRole {
+  model: string
+  base_url?: string
+}
+
+export interface SettingsResponse {
+  keys: Record<string, KeyState>
+  models: Record<string, ModelRole>
+}
+
+export interface SettingsUpdate {
+  keys?: Record<string, string> // 仅传需更新的明文 Key
+  models?: Record<string, ModelRole>
+}
+
+export async function getSettings(): Promise<SettingsResponse> {
+  const { data } = await api.get('/settings')
+  return data
+}
+
+export async function updateSettings(payload: SettingsUpdate): Promise<SettingsResponse> {
+  const { data } = await api.put('/settings', payload)
+  return data
+}
+
+export async function testProvider(provider: string): Promise<{ ok: boolean; message: string }> {
+  const { data } = await api.post('/settings/test', { provider })
+  return data
 }

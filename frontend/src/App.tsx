@@ -1,12 +1,13 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
+import Chat from './pages/Chat'
 import KnowledgeBases from './pages/KnowledgeBases'
 import KnowledgeBaseDetail from './pages/KnowledgeBaseDetail'
-import SmartChunking from './pages/SmartChunking'
-import HybridSearch from './pages/HybridSearch'
-import ChatQA from './pages/ChatQA'
+import Search from './pages/Search'
+import Settings from './pages/Settings'
 import ThesisProject from './pages/ThesisProject'
 import ThesisWorkspace from './pages/ThesisWorkspace'
+import SectionWorkspace from './pages/SectionWorkspace'
 import { ChatProvider } from './context/ChatContext'
 
 export default function App() {
@@ -15,13 +16,14 @@ export default function App() {
       <ChatProvider>
         <Layout>
           <Routes>
-            <Route path="/" element={<KnowledgeBases />} />
-            <Route path="/kb/:id" element={<KnowledgeBaseDetail />} />
-            <Route path="/chunking" element={<SmartChunking />} />
-            <Route path="/search" element={<HybridSearch />} />
-            <Route path="/chat" element={<ChatQA />} />
-            <Route path="/thesis" element={<ThesisProject />} />
-            <Route path="/thesis/:id" element={<ThesisWorkspace />} />
+            <Route path="/" element={<Chat />} />
+            <Route path="/knowledge" element={<KnowledgeBases />} />
+            <Route path="/knowledge/:id" element={<KnowledgeBaseDetail />} />
+            <Route path="/search" element={<Search />} />
+            <Route path="/writing" element={<ThesisProject />} />
+            <Route path="/writing/:id" element={<ThesisWorkspace />} />
+            <Route path="/writing/:id/section/:sid" element={<SectionWorkspace />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>
       </ChatProvider>

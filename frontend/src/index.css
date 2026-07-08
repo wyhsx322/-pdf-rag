@@ -1,6 +1,19 @@
+/* 第三方样式：数学公式 + 代码高亮（@import 须置于所有语句之前） */
+@import 'katex/dist/katex.min.css';
+@import 'highlight.js/styles/github.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── 设计 token（CSS 变量，便于后续暗色扩展） ── */
+:root {
+  --bg: #ffffff;
+  --bg-subtle: #f8fafc;     /* slate-50 */
+  --border: #e8ebf0;
+  --text: #1e2530;
+  --text-muted: #64748b;    /* slate-500 */
+}
 
 * {
   margin: 0;
@@ -8,28 +21,90 @@
   box-sizing: border-box;
 }
 
+html, body, #root {
+  height: 100%;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    "Noto Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background: var(--bg-subtle);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 /* 自定义滚动条 */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background-color: #cbd5e1;
-  border-radius: 3px;
+  background-color: #d4dae3;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #b6bfcc;
+  background-clip: content-box;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background-color: #94a3b8;
+/* 品牌渐变文字工具类 */
+.text-gradient {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
+
+/* Markdown 容器：覆盖 prose 在本设计中的细节 */
+.prose-chat {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: #2b323d;
+}
+.prose-chat p { margin: 0.5em 0; }
+.prose-chat ul, .prose-chat ol { margin: 0.5em 0; padding-left: 1.4em; }
+.prose-chat li { margin: 0.2em 0; }
+.prose-chat h1, .prose-chat h2, .prose-chat h3 { margin: 0.8em 0 0.4em; font-weight: 600; }
+.prose-chat pre {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 0.6rem;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  margin: 0.7em 0;
+}
+.prose-chat pre code { background: transparent; padding: 0; color: inherit; }
+.prose-chat :not(pre) > code {
+  background: #eef2ff;
+  color: #4f46e5;
+  padding: 0.1em 0.35em;
+  border-radius: 0.3rem;
+  font-size: 0.85em;
+  font-family: var(--mono, monospace);
+}
+.prose-chat table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.7em 0;
+  font-size: 0.875rem;
+}
+.prose-chat th, .prose-chat td {
+  border: 1px solid #e8ebf0;
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+}
+.prose-chat th { background: #f8fafc; font-weight: 600; }
+.prose-chat blockquote {
+  border-left: 3px solid #c7d2fe;
+  padding-left: 0.9rem;
+  color: #64748b;
+  margin: 0.6em 0;
+}
+.prose-chat a { color: #5b54e8; text-decoration: underline; text-underline-offset: 2px; }

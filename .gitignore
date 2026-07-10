@@ -45,6 +45,9 @@ logs/
 .uv-cache/
 *.ipynb_checkpoints/
 
+# Local project documentation
+/README_INTERNAL.md
+
 # System files
 .DS_Store
 Thumbs.db

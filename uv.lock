@@ -1546,7 +1546,7 @@ wheels = [
 ]
 
 [[package]]
-name = "lc-course"
+name = "ai-research-paper-writing-assistant"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

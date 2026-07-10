@@ -48,7 +48,7 @@ AI 应用开发岗通常不只看“会调大模型 API”，更看能否把 LLM
 ### P0：效果闭环
 
 1. 建黄金测试集：按精确查找、概念解释、方法对比、跨论文综合、图表理解分 5 类问题。
-2. 做自动评测页面：把 `test/eval_retrieval.py` 的 Recall@K、MRR、NDCG 接到前端。
+2. 做自动评测页面：把 `evaluations/eval_retrieval.py` 的 Recall@K、MRR、NDCG 接到前端。
 3. 做 A/B 策略对比：baseline、rewrite、HyDE、reranker、不同 chunk 参数并排对比。
 4. 做回答评测：Faithfulness、引用覆盖率、答案相关性、无法回答时的拒答质量。
 

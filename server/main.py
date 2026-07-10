@@ -5,7 +5,6 @@ FastAPI 应用入口。
 
 import os
 import re
-import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,13 +12,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-# 将项目根目录加入 sys.path，以便导入 test 模块
 PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv(PROJECT_ROOT / ".env", override=False)
 
-from server.routers import kb, documents, chunking, search, chat, usage, conversations, settings
-from server.routers import agent as agent_router
+from server.api.routes import kb, documents, chunking, search, chat, usage, conversations, settings, memory
+from server.api.routes import agent as agent_router
 
 settings.apply_runtime_config()
 
@@ -47,6 +44,7 @@ app.include_router(chat.router, prefix="/api", tags=["问答"])
 app.include_router(usage.router, prefix="/api", tags=["用量"])
 app.include_router(conversations.router, prefix="/api", tags=["对话"])
 app.include_router(settings.router, prefix="/api", tags=["配置"])
+app.include_router(memory.router, prefix="/api", tags=["长期记忆"])
 app.include_router(agent_router.router, prefix="/api/agent", tags=["多智能体"])
 
 # ── 图片静态文件服务 ──
@@ -68,6 +66,28 @@ def serve_image(source: str, filename: str):
 
     base_dir = (PROJECT_ROOT / "output" / "markd_demo").resolve()
     file_path = (base_dir / source / filename).resolve()
+
+    if not str(file_path).startswith(str(base_dir)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    return FileResponse(str(file_path))
+
+
+@app.get("/api/draft-images/{project_id}/{filename}")
+def serve_draft_image(project_id: int, filename: str):
+    """安全地提供论文初稿/章节编辑器中上传或导入的图片。"""
+    if project_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid project id")
+    if not _SAFE_FILENAME_RE.match(filename):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in _ALLOWED_IMG_EXT:
+        raise HTTPException(status_code=400, detail="Invalid file type")
+
+    base_dir = (PROJECT_ROOT / "output" / "draft_assets").resolve()
+    file_path = (base_dir / f"project_{project_id}" / filename).resolve()
 
     if not str(file_path).startswith(str(base_dir)):
         raise HTTPException(status_code=403, detail="Access denied")

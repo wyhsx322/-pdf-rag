@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from server.database import get_connection, now_iso
+from server.core.database import get_connection, now_iso
 
 
 _PREFERENCE_HINTS = (

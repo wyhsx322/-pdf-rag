@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass
 from math import ceil
 
-from test.config import (
+from server.core.config import (
     RAG_LLM_API_KEY_ENV,
     RAG_LLM_BASE_URL,
     RAG_LLM_MAX_TOKENS,

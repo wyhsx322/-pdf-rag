@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from server.database import get_connection
+from server.core.database import get_connection
 
 
 class MidTermMemory:

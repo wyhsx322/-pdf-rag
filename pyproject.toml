@@ -1,7 +1,7 @@
 [project]
-name = "lc-course"
+name = "ai-research-paper-writing-assistant"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local AI research paper writing assistant with PDF RAG, evidence retrieval, and citation-aware drafting."
 requires-python = ">=3.13"
 dependencies = [
     "chromadb>=1.5.9",
